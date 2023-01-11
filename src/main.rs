@@ -20,12 +20,18 @@ struct Log<'a> {
 }
 
 fn main() {
-    let path = std::env::args()
-        .nth(1)
-        .expect("Argument 1 needs to be a path");
-    
-    if let Err(e) = watch(path) {
-        println!("error: {:?}", e)
+    match std::env::args().nth(1) {
+        Some(path) => {
+            if let Err(e) = watch(path) {
+                eprintln!("Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        None => {
+            for line in std::io::stdin().lines() {
+                print_contents(&line.unwrap());
+            }
+        }
     }
 }
 
@@ -45,9 +51,7 @@ fn watch<P: AsRef<Path>>(path: P) -> notify::Result<()> {
 
     loop {
         match rx.recv() {
-            Ok(_event) => {
-                // println!("event: {:?}", event);
-
+            Ok(_) => {
                 let mut f = File::open(&path).unwrap();
                 f.seek(SeekFrom::Start(pos)).unwrap();
 
@@ -58,8 +62,8 @@ fn watch<P: AsRef<Path>>(path: P) -> notify::Result<()> {
 
                 print_contents(&contents);
             }
-            Err(err) => {
-                eprintln!("Error: {:?}", err);
+            Err(e) => {
+                eprintln!("Error: {:?}", e);
                 std::process::exit(1);
             }
         }
