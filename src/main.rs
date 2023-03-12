@@ -1,3 +1,4 @@
+use clap::Parser;
 use colored::Colorize;
 use notify::{Config, RecommendedWatcher, Watcher, RecursiveMode};
 use regex::Regex;
@@ -6,6 +7,18 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+   /// Log Parsing Mode (clf, ad-hoc)
+   #[arg(short, long)]
+   mode: Option<String>,
+
+   /// Path to the log file
+   #[arg(short, long)]
+   path: Option<String>,
+}
 
 struct Log<'a> {
     client: &'a str,
@@ -20,22 +33,34 @@ struct Log<'a> {
 }
 
 fn main() {
-    match std::env::args().nth(1) {
-        Some(path) => {
-            if let Err(e) = watch(path) {
+    let args = Args::parse();
+
+    let mode: String = match args.mode {
+        Some(m) => { m }
+        _ => { "ad-hoc".to_string() }
+    };
+
+    let path: Option<String> = match args.path {
+        Some(p) => { Some(p) },
+        _ => { None }
+    };
+
+    match path {
+        Some(p) => {
+            if let Err(e) = watch(p, &mode) {
                 eprintln!("Error: {:?}", e);
                 std::process::exit(1);
             }
         }
         None => {
             for line in std::io::stdin().lines() {
-                print_contents(&line.unwrap());
+                print_contents(&line.unwrap(), &mode);
             }
         }
     }
 }
 
-fn watch<P: AsRef<Path>>(path: P) -> notify::Result<()> {
+fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
     let (tx, rx) = mpsc::channel();
 
     let config = Config::default()
@@ -60,7 +85,7 @@ fn watch<P: AsRef<Path>>(path: P) -> notify::Result<()> {
                 contents.clear();
                 f.read_to_string(&mut contents).unwrap();
 
-                print_contents(&contents);
+                print_contents(&contents, mode);
             }
             Err(e) => {
                 eprintln!("Error: {:?}", e);
@@ -70,8 +95,26 @@ fn watch<P: AsRef<Path>>(path: P) -> notify::Result<()> {
     }
 }
 
-fn print_contents(contents: &str) {
+fn print_contents(contents: &str, mode: &str) {
+    match mode {
+        "clf" => { print_clf(contents) },
+        _ => { print_adhoc(contents) }
+    }
+}
 
+fn print_adhoc(contents: &str) {
+    let mut lines = contents.lines();
+
+    while let Some(line) = lines.next() {
+        if line.is_empty() {
+            continue;
+        }
+
+        println!("{} ", line);
+    }
+}
+
+fn print_clf(contents: &str) {
     // common log format
     let re = Regex::new(
         r#"(?x)
