@@ -1,3 +1,18 @@
+#[macro_use]
+extern crate lazy_static;
+
+use std::collections::HashMap;
+
+lazy_static! {
+    static ref MATCHERS: HashMap<&'static str, Regex> = {
+        let mut m = HashMap::new();
+        m.insert("ip_addr", Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap());
+        m.insert("get", Regex::new(r"GET").unwrap());
+
+        m
+    };
+}
+
 use clap::Parser;
 use colored::{Colorize, ColoredString};
 use notify::{Config, RecommendedWatcher, Watcher, RecursiveMode};
@@ -124,13 +139,9 @@ fn print_highlighted(line: &str) {
 }
 
 fn highlight_word(word: &str) -> ColoredString {
-
-    let re_ip_addr = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
-    let re_get = Regex::new(r"GET").unwrap();
-
-    if re_ip_addr.is_match(word) {
+    if MATCHERS.get("ip_addr").unwrap().is_match(word) {
         word.bright_red()
-    } else if re_get.is_match(word) {
+    } else if MATCHERS.get("get").unwrap().is_match(word) {
         word.bright_green()
     } else {
         word.normal()
