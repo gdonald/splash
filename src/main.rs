@@ -1,5 +1,5 @@
 use clap::Parser;
-use colored::Colorize;
+use colored::{Colorize, ColoredString};
 use notify::{Config, RecommendedWatcher, Watcher, RecursiveMode};
 use regex::Regex;
 use std::fs::{self, File};
@@ -110,7 +110,30 @@ fn print_adhoc(contents: &str) {
             continue;
         }
 
-        println!("{} ", line);
+        print_highlighted(line);
+    }
+}
+
+fn print_highlighted(line: &str) {
+    for w in line.split_whitespace() {
+        let word = highlight_word(w);
+        print!("{} ", word);
+    }
+
+    println!();
+}
+
+fn highlight_word(word: &str) -> ColoredString {
+
+    let re_ip_addr = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
+    let re_get = Regex::new(r"GET").unwrap();
+
+    if re_ip_addr.is_match(word) {
+        word.bright_red()
+    } else if re_get.is_match(word) {
+        word.bright_green()
+    } else {
+        word.normal()
     }
 }
 
