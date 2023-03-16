@@ -9,6 +9,10 @@ lazy_static! {
         m.insert("ip_addr", Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap());
         m.insert("http_verb", Regex::new(r"(.*)(GET|POST)(.*)").unwrap());
         m.insert("number", Regex::new(r"^\d+$").unwrap());
+
+        m.insert("quote", Regex::new("\"").unwrap());
+        m.insert("square_bracket", Regex::new(r"\[|\]").unwrap());
+
         m
     };
 }
@@ -130,12 +134,15 @@ fn print_adhoc(contents: &str) {
 }
 
 fn print_highlighted(line: &str) {
-    for w in line.split_whitespace() {
-        let word = highlight_word(w);
-        print!("{} ", word);
+    let mut final_str: String = "".to_owned();
+    let hcs: String = highlight_chars(line).to_string();
+
+    for word in hcs.split_whitespace() {
+        final_str.push_str(&highlight_word(word).to_string());
+        final_str.push_str(" ");
     }
 
-    println!();
+    println!("{}", final_str.trim());
 }
 
 fn matcher(name: &str) -> &Regex {
@@ -143,23 +150,19 @@ fn matcher(name: &str) -> &Regex {
 }
 
 fn highlight_word(word: &str) -> ColoredString {
-
     let mut re: &Regex;
 
     re = matcher("number");
-
     if re.is_match(word) {
-        return word.bright_blue();
+        return word.blue();
     }
 
     re = matcher("ip_addr");
-
     if re.is_match(word) {
-        return word.bright_red();
+        return word.red().on_white();
     }
 
     re = matcher("http_verb");
-
     if re.is_match(word) {
         let caps = re.captures(word).unwrap();
 
@@ -172,6 +175,24 @@ fn highlight_word(word: &str) -> ColoredString {
     }
 
     word.normal()
+}
+
+fn highlight_chars(line: &str) -> ColoredString {
+    let mut final_str: String = "".to_owned();
+
+    for c in line.chars() {
+        let c_str = c.to_string();
+
+        if matcher("quote").is_match(&c_str) {
+            final_str.push_str(&c_str.bright_cyan().to_string());
+        } else if matcher("square_bracket").is_match(&c_str) {
+            final_str.push_str(&c_str.bright_green().to_string());
+        } else {
+            final_str.push_str(&c_str);
+        }
+    }
+
+    final_str.normal()
 }
 
 fn print_clf(contents: &str) {
