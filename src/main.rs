@@ -6,9 +6,9 @@ use std::collections::HashMap;
 lazy_static! {
     static ref MATCHERS: HashMap<&'static str, Regex> = {
         let mut m = HashMap::new();
-        m.insert("ip_addr", Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap());
-        m.insert("get", Regex::new(r"GET").unwrap());
-
+        m.insert("ip_addr", Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap());
+        m.insert("http_verb", Regex::new(r"(.*)(GET|POST)(.*)").unwrap());
+        m.insert("number", Regex::new(r"^\d+$").unwrap());
         m
     };
 }
@@ -138,14 +138,40 @@ fn print_highlighted(line: &str) {
     println!();
 }
 
+fn matcher(name: &str) -> &Regex {
+    MATCHERS.get(name).unwrap()
+}
+
 fn highlight_word(word: &str) -> ColoredString {
-    if MATCHERS.get("ip_addr").unwrap().is_match(word) {
-        word.bright_red()
-    } else if MATCHERS.get("get").unwrap().is_match(word) {
-        word.bright_green()
-    } else {
-        word.normal()
+
+    let mut re: &Regex;
+
+    re = matcher("number");
+
+    if re.is_match(word) {
+        return word.bright_blue();
     }
+
+    re = matcher("ip_addr");
+
+    if re.is_match(word) {
+        return word.bright_red();
+    }
+
+    re = matcher("http_verb");
+
+    if re.is_match(word) {
+        let caps = re.captures(word).unwrap();
+
+        let mut s: String = "".to_owned();
+        s.push_str(caps.get(1).unwrap().as_str());
+        s.push_str(&caps.get(2).unwrap().as_str().bright_green().to_string());
+        s.push_str(caps.get(3).unwrap().as_str());
+
+        return s.normal();
+    }
+
+    word.normal()
 }
 
 fn print_clf(contents: &str) {
