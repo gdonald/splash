@@ -7,7 +7,7 @@ lazy_static! {
     static ref MATCHERS: HashMap<&'static str, Regex> = {
         let mut m = HashMap::new();
         m.insert("ip_addr", Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap());
-        m.insert("http_verb", Regex::new(r"(.*)(GET|POST)(.*)").unwrap());
+        m.insert("http_verb", Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap());
         m.insert("number", Regex::new(r"^\d+$").unwrap());
 
         m.insert("quote", Regex::new("\"").unwrap());
