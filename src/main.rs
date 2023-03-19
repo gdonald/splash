@@ -6,10 +6,16 @@ use std::collections::HashMap;
 lazy_static! {
     static ref MATCHERS: HashMap<&'static str, Regex> = {
         let mut m = HashMap::new();
+
+        // words
         m.insert("ip_addr", Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap());
         m.insert("http_verb", Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap());
+        m.insert("http_version", Regex::new(r"HTTP/1.0").unwrap());
         m.insert("number", Regex::new(r"^\d+$").unwrap());
+        m.insert("datetime", Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap());
+        m.insert("tz_offset", Regex::new(r"[-]?\d{4}").unwrap());
 
+        // characters
         m.insert("quote", Regex::new("\"").unwrap());
         m.insert("square_bracket", Regex::new(r"\[|\]").unwrap());
 
@@ -154,12 +160,27 @@ fn highlight_word(word: &str) -> ColoredString {
 
     re = matcher("number");
     if re.is_match(word) {
-        return word.blue();
+        return word.bright_blue();
     }
 
     re = matcher("ip_addr");
     if re.is_match(word) {
-        return word.red().on_white();
+        return word.bright_red();
+    }
+
+    re = matcher("datetime");
+    if re.is_match(word) {
+        return word.cyan();
+    }
+
+    re = matcher("tz_offset");
+    if re.is_match(word) {
+        return word.cyan();
+    }
+
+    re = matcher("http_version");
+    if re.is_match(word) {
+        return word.cyan();
     }
 
     re = matcher("http_verb");
@@ -184,9 +205,9 @@ fn highlight_chars(line: &str) -> ColoredString {
         let c_str = c.to_string();
 
         if matcher("quote").is_match(&c_str) {
-            final_str.push_str(&c_str.bright_cyan().to_string());
+            final_str.push_str(&c_str.bright_white().to_string());
         } else if matcher("square_bracket").is_match(&c_str) {
-            final_str.push_str(&c_str.bright_green().to_string());
+            final_str.push_str(&c_str.bright_white().to_string());
         } else {
             final_str.push_str(&c_str);
         }
