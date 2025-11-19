@@ -2,8 +2,9 @@
 
 A fast, modern log colorizer built in Rust.
 
-[![Tests](https://img.shields.io/badge/tests-27%20passing-brightgreen)]()
-[![Clippy](https://img.shields.io/badge/clippy-passing-brightgreen)]()
+###
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/gdonald/splash/blob/main/LICENSE) [![CI](https://github.com/gdonald/splash/workflows/CI/badge.svg)](https://github.com/gdonald/splash/actions) [![codecov](https://codecov.io/gh/gdonald/splash/graph/badge.svg?token=GQ4LA1VMRE)](https://codecov.io/gh/gdonald/splash)
 
 ## Quick Start
 
@@ -168,10 +169,3 @@ cat tests/examples/real_apache.log | cargo run -- --mode clf
 # Test with real logs
 tail -f /var/log/syslog | cargo run
 ```
-
----
-
-## License
-
-[https://github.com/gdonald/splash/blob/main/LICENSE](https://github.com/gdonald/splash/blob/main/LICENSE)
-
