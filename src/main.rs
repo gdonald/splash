@@ -24,8 +24,8 @@ lazy_static! {
 }
 
 use clap::Parser;
-use colored::{Colorize, ColoredString};
-use notify::{Config, RecommendedWatcher, Watcher, RecursiveMode};
+use colored::{ColoredString, Colorize};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -36,13 +36,13 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-   /// Log Parsing Mode (clf, ad-hoc)
-   #[arg(short, long)]
-   mode: Option<String>,
+    /// Log Parsing Mode (clf, ad-hoc)
+    #[arg(short, long)]
+    mode: Option<String>,
 
-   /// Path to the log file
-   #[arg(short, long)]
-   path: Option<String>,
+    /// Path to the log file
+    #[arg(short, long)]
+    path: Option<String>,
 }
 
 struct Log<'a> {
@@ -60,15 +60,9 @@ struct Log<'a> {
 fn main() {
     let args = Args::parse();
 
-    let mode: String = match args.mode {
-        Some(m) => { m }
-        _ => { "ad-hoc".to_string() }
-    };
+    let mode: String = args.mode.unwrap_or_else(|| "ad-hoc".to_string());
 
-    let path: Option<String> = match args.path {
-        Some(p) => { Some(p) },
-        _ => { None }
-    };
+    let path: Option<String> = args.path;
 
     match path {
         Some(p) => {
@@ -89,14 +83,16 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
     let (tx, rx) = mpsc::channel();
 
     let config = Config::default()
-                    .with_poll_interval(Duration::from_secs(2))
-                    .with_compare_contents(true);
+        .with_poll_interval(Duration::from_secs(2))
+        .with_compare_contents(true);
 
     let mut watcher = RecommendedWatcher::new(tx, config)?;
 
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
-    
+
+    // Print initial file contents
     let mut contents = fs::read_to_string(&path).unwrap();
+    print_contents(&contents, mode);
     let mut pos = contents.len() as u64;
 
     loop {
@@ -122,15 +118,13 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
 
 fn print_contents(contents: &str, mode: &str) {
     match mode {
-        "clf" => { print_clf(contents) },
-        _ => { print_adhoc(contents) }
+        "clf" => print_clf(contents),
+        _ => print_adhoc(contents),
     }
 }
 
 fn print_adhoc(contents: &str) {
-    let mut lines = contents.lines();
-
-    while let Some(line) = lines.next() {
+    for line in contents.lines() {
         if line.is_empty() {
             continue;
         }
@@ -145,7 +139,7 @@ fn print_highlighted(line: &str) {
 
     for word in hcs.split_whitespace() {
         final_str.push_str(&highlight_word(word).to_string());
-        final_str.push_str(" ");
+        final_str.push(' ');
     }
 
     println!("{}", final_str.trim());
@@ -204,9 +198,7 @@ fn highlight_chars(line: &str) -> ColoredString {
     for c in line.chars() {
         let c_str = c.to_string();
 
-        if matcher("quote").is_match(&c_str) {
-            final_str.push_str(&c_str.bright_white().to_string());
-        } else if matcher("square_bracket").is_match(&c_str) {
+        if matcher("quote").is_match(&c_str) || matcher("square_bracket").is_match(&c_str) {
             final_str.push_str(&c_str.bright_white().to_string());
         } else {
             final_str.push_str(&c_str);
@@ -233,12 +225,11 @@ fn print_clf(contents: &str) {
         (\d{3})                                      # status
         \s
         (\d+|-)                                      # size
-        "#
-    ).unwrap();
+        "#,
+    )
+    .unwrap();
 
-    let mut lines = contents.lines();
-
-    while let Some(line) = lines.next() {
+    for line in contents.lines() {
         if line.is_empty() {
             continue;
         }
@@ -286,9 +277,14 @@ fn print_clf(contents: &str) {
             print!("{} ", field.user_identifier.white());
             print!("{} ", field.userid.white().bold());
             print!("{} ", field.datetime.bright_magenta());
-            print!("\"{} {} {}\" ", field.method.bright_cyan(), field.request.cyan(), field.protocol.cyan());
+            print!(
+                "\"{} {} {}\" ",
+                field.method.bright_cyan(),
+                field.request.cyan(),
+                field.protocol.cyan()
+            );
             print!("{} ", field.status.bright_yellow());
-            print!("{}",  field.size.bright_green());
+            print!("{}", field.size.bright_green());
             println!();
         }
     }

@@ -1,0 +1,12 @@
+[15/Jan/2024:10:30:45 +0000] 192.168.1.100 GET /index.html HTTP/1.1 200 1234
+Server processing 500 requests from 10.0.0.50
+"User authentication" successful for client 172.16.0.25
+[POST] /api/data received 2048 bytes
+Status: 404 for request to /missing
+Connection from 192.168.1.200 on port 8080
+Processing time: 125 ms for GET /api/users
+Cache [HIT] for resource /static/style.css
+Memory usage at 1536 MB, threshold 2048
+[ERROR] Failed to connect to 10.1.1.1 on port 443
+DELETE operation completed in 89 ms
+User "admin" logged in from 192.168.0.1

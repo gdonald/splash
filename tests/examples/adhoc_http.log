@@ -1,0 +1,11 @@
+GET request to /api/v1/users
+POST data received for /api/v1/login
+PUT request updating resource at /api/v1/users/123
+DELETE request for /api/v1/sessions/abc
+PATCH request modifying /api/v1/profile
+HEAD request checking /api/v1/health
+OPTIONS request for /api/v1/users
+CONNECT tunnel established
+TRACE debugging enabled
+GET /static/images/logo.png HTTP/1.1
+POST /forms/submit HTTP/1.0

@@ -1,0 +1,4 @@
+192.168.1.100 - alice [15/Jan/2024:10:30:45 +0000] "GET /index.html HTTP/1.1" 200 1234
+10.0.0.50 - bob [15/Jan/2024:10:31:12 +0000] "POST /api/login HTTP/1.1" 200 512
+172.16.0.25 - charlie [15/Jan/2024:10:32:03 +0000] "GET /images/logo.png HTTP/1.1" 304 0
+192.168.1.101 - dave [15/Jan/2024:10:33:21 +0000] "GET /contact.html HTTP/1.1" 200 2048

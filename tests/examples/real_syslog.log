@@ -1,0 +1,10 @@
+Jan 15 10:30:45 server1 sshd[12345]: Accepted publickey for alice from 192.168.1.100 port 54321 ssh2: RSA SHA256:abcdef1234567890
+Jan 15 10:31:12 server1 systemd[1]: Started User Manager for UID 1000.
+Jan 15 10:32:03 server1 kernel: [12345.678901] eth0: link up, 1000Mbps, full-duplex
+Jan 15 10:33:21 server1 nginx[5678]: 192.168.1.101 - - [15/Jan/2024:10:33:21 +0000] "GET /api/health HTTP/1.1" 200
+Jan 15 10:34:00 server1 sshd[12346]: Failed password for invalid user admin from 10.0.0.50 port 43210 ssh2
+Jan 15 10:35:15 server1 systemd[1]: nginx.service: Main process exited, code=exited, status=0/SUCCESS
+Jan 15 10:36:45 server1 postgresql[9876]: [1-1] LOG:  database system is ready to accept connections
+Jan 15 10:37:30 server1 cron[1234]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)
+Jan 15 10:38:12 server1 postfix/smtp[4567]: 1234567890ABC: to=<user@example.com>, relay=smtp.example.com[192.168.1.200]:25, delay=0.5, status=sent
+Jan 15 10:39:00 server1 sudo: alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx

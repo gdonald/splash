@@ -1,0 +1,7 @@
+127.0.0.1 - user1 [10/Oct/2024:12:00:00 -0700] "GET /api/users HTTP/1.1" 200 1024
+127.0.0.1 - user2 [10/Oct/2024:12:01:00 -0700] "POST /api/users HTTP/1.1" 201 256
+127.0.0.1 - user3 [10/Oct/2024:12:02:00 -0700] "PUT /api/users/123 HTTP/1.1" 200 512
+127.0.0.1 - user4 [10/Oct/2024:12:03:00 -0700] "PATCH /api/users/123 HTTP/1.1" 200 128
+127.0.0.1 - user5 [10/Oct/2024:12:04:00 -0700] "DELETE /api/users/123 HTTP/1.1" 204 0
+127.0.0.1 - user6 [10/Oct/2024:12:05:00 -0700] "HEAD /api/health HTTP/1.1" 200 0
+127.0.0.1 - user7 [10/Oct/2024:12:06:00 -0700] "OPTIONS /api/users HTTP/1.1" 200 64

@@ -1,0 +1,8 @@
+Request with "quotes" and [brackets] and {braces}
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36
+Special chars: !@#$%^&*()_+-={}[]|\:";'<>?,./
+UTF-8 content: café résumé naïve 日本語 中文 한글 العربية
+Escaped sequences: \n \t \r \\ \" \'
+Email: user@example.com and URL: https://example.com:8080/path?query=1
+Regex patterns: ^\d+$ and [a-zA-Z]+ and \w+@\w+\.\w+
+Math expressions: 2+2=4, 10*5=50, 100/4=25
