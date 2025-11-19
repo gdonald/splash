@@ -1,37 +1,40 @@
-#[macro_use]
-extern crate lazy_static;
-
-use std::collections::HashMap;
-
-lazy_static! {
-    static ref MATCHERS: HashMap<&'static str, Regex> = {
-        let mut m = HashMap::new();
-
-        // words
-        m.insert("ip_addr", Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap());
-        m.insert("http_verb", Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap());
-        m.insert("http_version", Regex::new(r"HTTP/1.0").unwrap());
-        m.insert("number", Regex::new(r"^\d+$").unwrap());
-        m.insert("datetime", Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap());
-        m.insert("tz_offset", Regex::new(r"[-]?\d{4}").unwrap());
-
-        // characters
-        m.insert("quote", Regex::new("\"").unwrap());
-        m.insert("square_bracket", Regex::new(r"\[|\]").unwrap());
-
-        m
-    };
-}
-
 use clap::Parser;
 use colored::{ColoredString, Colorize};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{mpsc, LazyLock};
 use std::time::Duration;
+
+static MATCHERS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+
+    // words
+    m.insert(
+        "ip_addr",
+        Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap(),
+    );
+    m.insert(
+        "http_verb",
+        Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap(),
+    );
+    m.insert("http_version", Regex::new(r"HTTP/1.0").unwrap());
+    m.insert("number", Regex::new(r"^\d+$").unwrap());
+    m.insert(
+        "datetime",
+        Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap(),
+    );
+    m.insert("tz_offset", Regex::new(r"[-]?\d{4}").unwrap());
+
+    // characters
+    m.insert("quote", Regex::new("\"").unwrap());
+    m.insert("square_bracket", Regex::new(r"\[|\]").unwrap());
+
+    m
+});
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
