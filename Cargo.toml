@@ -7,5 +7,5 @@ edition = "2021"
 clap = { version = "4.5.52", features = ["derive"] }
 colored = "2.1.0"
 lazy_static = "1.4.0"
-notify = "6.1.1"
+notify = "8.2.0"
 regex = "1.10.2"
