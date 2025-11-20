@@ -1,3 +1,7 @@
+mod discovery;
+mod plugin;
+mod registry;
+
 use clap::Parser;
 use colored::{ColoredString, Colorize};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
@@ -46,6 +50,18 @@ struct Args {
     /// Path to the log file
     #[arg(short, long)]
     path: Option<String>,
+
+    /// List all available plugins
+    #[arg(long)]
+    list_plugins: bool,
+
+    /// Use a specific plugin by name
+    #[arg(long)]
+    plugin: Option<String>,
+
+    /// Disable a specific plugin by name
+    #[arg(long)]
+    disable_plugin: Option<String>,
 }
 
 struct Log<'a> {
@@ -63,6 +79,24 @@ struct Log<'a> {
 fn main() {
     let args = Args::parse();
 
+    // Handle plugin commands
+    if args.list_plugins {
+        list_plugins();
+        return;
+    }
+
+    if let Some(plugin_name) = args.disable_plugin {
+        println!("Disabling plugin: {}", plugin_name);
+        println!("Note: Plugin disable functionality will be available in a future version");
+        return;
+    }
+
+    if let Some(plugin_name) = args.plugin {
+        println!("Using plugin: {}", plugin_name);
+        println!("Note: Specific plugin selection will be available in a future version");
+        // Fall through to normal processing for now
+    }
+
     let mode: String = args.mode.unwrap_or_else(|| "ad-hoc".to_string());
 
     let path: Option<String> = args.path;
@@ -79,6 +113,46 @@ fn main() {
                 print_contents(&line.unwrap(), &mode);
             }
         }
+    }
+}
+
+fn list_plugins() {
+    use crate::registry::PluginRegistry;
+
+    let registry = PluginRegistry::new();
+
+    println!("Available Plugins:");
+    println!("==================");
+
+    match registry.list_plugins() {
+        Ok(plugins) => {
+            if plugins.is_empty() {
+                println!("No plugins currently registered.");
+                println!("\nBuilt-in modes:");
+                println!("  - clf (Common Log Format)");
+                println!("  - ad-hoc (General pattern matching)");
+            } else {
+                for plugin_name in plugins {
+                    match registry.get(&plugin_name) {
+                        Ok(plugin) => {
+                            println!("  {} v{}", plugin.name(), plugin.version());
+                        }
+                        Err(_) => {
+                            println!("  {} (error loading details)", plugin_name);
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error listing plugins: {}", e);
+        }
+    }
+
+    println!("\nPlugin discovery paths:");
+    let discovery = discovery::PluginDiscovery::new();
+    for path in discovery.search_paths() {
+        println!("  {}", path.display());
     }
 }
 
