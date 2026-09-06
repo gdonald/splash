@@ -1,4 +1,4 @@
-use splash::discovery::PluginDiscovery;
+use splash::discovery::{DiscoveryError, PluginDiscovery};
 use std::fs::{create_dir_all, File};
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -137,4 +137,85 @@ fn test_discover_from_multiple_paths() {
     let plugins = discovery.discover_plugins().unwrap();
 
     assert_eq!(plugins.len(), 2);
+}
+
+#[test]
+fn test_directory_not_found_error_names_the_directory() {
+    let error = DiscoveryError::DirectoryNotFound(PathBuf::from("/opt/splash/plugins"));
+
+    assert_eq!(
+        error.to_string(),
+        "Plugin directory not found: /opt/splash/plugins"
+    );
+}
+
+#[test]
+fn test_permission_denied_error_names_the_directory() {
+    let error = DiscoveryError::PermissionDenied(PathBuf::from("/root/plugins"));
+
+    assert_eq!(
+        error.to_string(),
+        "Permission denied accessing: /root/plugins"
+    );
+}
+
+#[test]
+fn test_io_error_reports_the_underlying_failure() {
+    let error = DiscoveryError::IoError(std::io::Error::other("disk fell over"));
+
+    assert_eq!(
+        error.to_string(),
+        "IO error during discovery: disk fell over"
+    );
+}
+
+#[test]
+fn test_an_io_error_converts_into_a_discovery_error() {
+    let error: DiscoveryError = std::io::Error::other("disk fell over").into();
+
+    assert!(matches!(error, DiscoveryError::IoError(_)));
+}
+
+#[test]
+fn test_a_discovery_error_is_a_standard_error() {
+    let error = DiscoveryError::DirectoryNotFound(PathBuf::from("/opt/splash/plugins"));
+    let as_error: &dyn std::error::Error = &error;
+
+    assert!(as_error.source().is_none());
+}
+
+#[test]
+fn test_default_discovery_matches_a_new_discovery() {
+    assert_eq!(
+        PluginDiscovery::default().search_paths(),
+        PluginDiscovery::new().search_paths()
+    );
+}
+
+#[test]
+fn test_a_directory_is_not_a_plugin_file() {
+    let temp = TempDir::new().unwrap();
+    let discovery = PluginDiscovery::with_paths(vec![temp.path().to_path_buf()]);
+
+    assert!(!discovery.is_plugin_file(temp.path()));
+}
+
+#[test]
+fn test_a_file_without_an_extension_is_not_a_plugin_file() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("plugin");
+    File::create(&path).unwrap();
+    let discovery = PluginDiscovery::with_paths(vec![temp.path().to_path_buf()]);
+
+    assert!(!discovery.is_plugin_file(&path));
+}
+
+#[test]
+fn test_discovery_skips_a_search_path_that_is_a_file() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("not-a-directory");
+    File::create(&path).unwrap();
+    let discovery = PluginDiscovery::with_paths(vec![path]);
+
+    assert_eq!(discovery.discover_plugins().unwrap(), Vec::<PathBuf>::new());
 }

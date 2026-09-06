@@ -108,6 +108,23 @@ impl PluginRegistry {
         Ok(plugins.keys().cloned().collect())
     }
 
+    /// Lists each registered plugin as "name vversion"
+    pub fn describe_plugins(&self) -> Result<Vec<String>, RegistryError> {
+        let plugins = self
+            .plugins
+            .read()
+            .map_err(|_| RegistryError::RegistryLocked)?;
+
+        let mut descriptions: Vec<String> = plugins
+            .values()
+            .map(|plugin| format!("{} v{}", plugin.name(), plugin.version()))
+            .collect();
+
+        descriptions.sort();
+
+        Ok(descriptions)
+    }
+
     /// Returns the number of registered plugins
     pub fn count(&self) -> usize {
         self.plugins.read().map(|p| p.len()).unwrap_or(0)

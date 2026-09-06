@@ -1,44 +1,20 @@
-mod discovery;
-mod plugin;
-mod registry;
-
 use clap::Parser;
-use colored::{ColoredString, Colorize};
+use crossterm::event;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::{cursor, execute, terminal};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use regex::Regex;
-use std::collections::HashMap;
+use splash::discovery::PluginDiscovery;
+use splash::output::OutputMode;
+use splash::registry::PluginRegistry;
+use splash::tui;
+use splash::{plugin_summary, render_contents};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, IsTerminal, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::{mpsc, LazyLock};
+use std::sync::mpsc;
 use std::time::Duration;
-
-static MATCHERS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
-
-    // words
-    m.insert(
-        "ip_addr",
-        Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap(),
-    );
-    m.insert(
-        "http_verb",
-        Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap(),
-    );
-    m.insert("http_version", Regex::new(r"HTTP/1.0").unwrap());
-    m.insert("number", Regex::new(r"^\d+$").unwrap());
-    m.insert(
-        "datetime",
-        Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap(),
-    );
-    m.insert("tz_offset", Regex::new(r"[-]?\d{4}").unwrap());
-
-    // characters
-    m.insert("quote", Regex::new("\"").unwrap());
-    m.insert("square_bracket", Regex::new(r"\[|\]").unwrap());
-
-    m
-});
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -50,6 +26,10 @@ struct Args {
     /// Path to the log file
     #[arg(short, long)]
     path: Option<String>,
+
+    /// Output format (ansi, curses, html, json, plain)
+    #[arg(short, long, default_value = "ansi")]
+    output: String,
 
     /// List all available plugins
     #[arg(long)]
@@ -64,24 +44,14 @@ struct Args {
     disable_plugin: Option<String>,
 }
 
-struct Log<'a> {
-    client: &'a str,
-    user_identifier: &'a str,
-    userid: &'a str,
-    datetime: &'a str,
-    method: &'a str,
-    request: &'a str,
-    protocol: &'a str,
-    status: &'a str,
-    size: &'a str,
-}
-
 fn main() {
     let args = Args::parse();
 
-    // Handle plugin commands
     if args.list_plugins {
-        list_plugins();
+        print!(
+            "{}",
+            plugin_summary(&PluginRegistry::new(), &PluginDiscovery::new())
+        );
         return;
     }
 
@@ -94,69 +64,51 @@ fn main() {
     if let Some(plugin_name) = args.plugin {
         println!("Using plugin: {}", plugin_name);
         println!("Note: Specific plugin selection will be available in a future version");
-        // Fall through to normal processing for now
     }
+
+    let output_mode: OutputMode = match args.output.parse() {
+        Ok(mode) => mode,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     let mode: String = args.mode.unwrap_or_else(|| "ad-hoc".to_string());
 
-    let path: Option<String> = args.path;
+    if output_mode.is_interactive() {
+        if let Err(e) = view(args.path.as_deref(), &mode, output_mode) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
 
-    match path {
+        return;
+    }
+
+    match args.path {
         Some(p) => {
-            if let Err(e) = watch(p, &mode) {
+            if let Err(e) = watch(p, &mode, output_mode) {
                 eprintln!("Error: {:?}", e);
                 std::process::exit(1);
             }
         }
         None => {
+            if let Some(header) = output_mode.header() {
+                print!("{}", header);
+            }
+
             for line in std::io::stdin().lines() {
-                print_contents(&line.unwrap(), &mode);
+                print!("{}", render_contents(&line.unwrap(), &mode, output_mode));
+            }
+
+            if let Some(footer) = output_mode.footer() {
+                print!("{}", footer);
             }
         }
     }
 }
 
-fn list_plugins() {
-    use crate::registry::PluginRegistry;
-
-    let registry = PluginRegistry::new();
-
-    println!("Available Plugins:");
-    println!("==================");
-
-    match registry.list_plugins() {
-        Ok(plugins) => {
-            if plugins.is_empty() {
-                println!("No plugins currently registered.");
-                println!("\nBuilt-in modes:");
-                println!("  - clf (Common Log Format)");
-                println!("  - ad-hoc (General pattern matching)");
-            } else {
-                for plugin_name in plugins {
-                    match registry.get(&plugin_name) {
-                        Ok(plugin) => {
-                            println!("  {} v{}", plugin.name(), plugin.version());
-                        }
-                        Err(_) => {
-                            println!("  {} (error loading details)", plugin_name);
-                        }
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Error listing plugins: {}", e);
-        }
-    }
-
-    println!("\nPlugin discovery paths:");
-    let discovery = discovery::PluginDiscovery::new();
-    for path in discovery.search_paths() {
-        println!("  {}", path.display());
-    }
-}
-
-fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
+fn watch<P: AsRef<Path>>(path: P, mode: &str, output_mode: OutputMode) -> notify::Result<()> {
     let (tx, rx) = mpsc::channel();
 
     let config = Config::default()
@@ -167,9 +119,12 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
 
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
 
-    // Print initial file contents
+    if let Some(header) = output_mode.header() {
+        print!("{}", header);
+    }
+
     let mut contents = fs::read_to_string(&path).unwrap();
-    print_contents(&contents, mode);
+    print!("{}", render_contents(&contents, mode, output_mode));
     let mut pos = contents.len() as u64;
 
     loop {
@@ -183,7 +138,7 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
                 contents.clear();
                 f.read_to_string(&mut contents).unwrap();
 
-                print_contents(&contents, mode);
+                print!("{}", render_contents(&contents, mode, output_mode));
             }
             Err(e) => {
                 eprintln!("Error: {:?}", e);
@@ -193,176 +148,32 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str) -> notify::Result<()> {
     }
 }
 
-fn print_contents(contents: &str, mode: &str) {
-    match mode {
-        "clf" => print_clf(contents),
-        _ => print_adhoc(contents),
+/// Reads the whole input and shows it in the scrollable viewer
+fn view(path: Option<&str>, mode: &str, output_mode: OutputMode) -> io::Result<()> {
+    if !io::stdout().is_terminal() {
+        return Err(io::Error::other(tui::NEEDS_TERMINAL));
     }
-}
 
-fn print_adhoc(contents: &str) {
-    for line in contents.lines() {
-        if line.is_empty() {
-            continue;
+    let contents = match path {
+        Some(p) => fs::read_to_string(p)?,
+        None => {
+            let mut buffer = String::new();
+            io::stdin().read_to_string(&mut buffer)?;
+            buffer
         }
+    };
 
-        print_highlighted(line);
-    }
-}
+    let (_, rows) = terminal::size()?;
+    let mut viewer = tui::viewer_for(&contents, mode, output_mode, rows);
+    let mut out = io::stdout();
 
-fn print_highlighted(line: &str) {
-    let mut final_str: String = "".to_owned();
-    let hcs: String = highlight_chars(line).to_string();
+    enable_raw_mode()?;
+    execute!(out, EnterAlternateScreen, cursor::Hide)?;
 
-    for word in hcs.split_whitespace() {
-        final_str.push_str(&highlight_word(word).to_string());
-        final_str.push(' ');
-    }
+    let result = tui::run_loop(&mut out, &mut viewer, &mut || event::read());
 
-    println!("{}", final_str.trim());
-}
+    execute!(out, cursor::Show, LeaveAlternateScreen)?;
+    disable_raw_mode()?;
 
-fn matcher(name: &str) -> &Regex {
-    MATCHERS.get(name).unwrap()
-}
-
-fn highlight_word(word: &str) -> ColoredString {
-    let mut re: &Regex;
-
-    re = matcher("number");
-    if re.is_match(word) {
-        return word.bright_blue();
-    }
-
-    re = matcher("ip_addr");
-    if re.is_match(word) {
-        return word.bright_red();
-    }
-
-    re = matcher("datetime");
-    if re.is_match(word) {
-        return word.cyan();
-    }
-
-    re = matcher("tz_offset");
-    if re.is_match(word) {
-        return word.cyan();
-    }
-
-    re = matcher("http_version");
-    if re.is_match(word) {
-        return word.cyan();
-    }
-
-    re = matcher("http_verb");
-    if re.is_match(word) {
-        let caps = re.captures(word).unwrap();
-
-        let mut s: String = "".to_owned();
-        s.push_str(caps.get(1).unwrap().as_str());
-        s.push_str(&caps.get(2).unwrap().as_str().bright_green().to_string());
-        s.push_str(caps.get(3).unwrap().as_str());
-
-        return s.normal();
-    }
-
-    word.normal()
-}
-
-fn highlight_chars(line: &str) -> ColoredString {
-    let mut final_str: String = "".to_owned();
-
-    for c in line.chars() {
-        let c_str = c.to_string();
-
-        if matcher("quote").is_match(&c_str) || matcher("square_bracket").is_match(&c_str) {
-            final_str.push_str(&c_str.bright_white().to_string());
-        } else {
-            final_str.push_str(&c_str);
-        }
-    }
-
-    final_str.normal()
-}
-
-fn print_clf(contents: &str) {
-    // common log format
-    let re = Regex::new(
-        r#"(?x)
-        ([\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}) # client
-        \s
-        (\S+)                                        # user_identifier
-        \s
-        (\S+)                                        # userid
-        \s
-        (?:(\[.*?\]))                                # datetime
-        \s
-        "([A-Z]+)\s(\S+)\s(\S+)"                     # method, request, protocol
-        \s
-        (\d{3})                                      # status
-        \s
-        (\d+|-)                                      # size
-        "#,
-    )
-    .unwrap();
-
-    for line in contents.lines() {
-        if line.is_empty() {
-            continue;
-        }
-
-        let fields = re.captures_iter(line).filter_map(|cap| {
-            let groups = (
-                cap.get(1),
-                cap.get(2),
-                cap.get(3),
-                cap.get(4),
-                cap.get(5),
-                cap.get(6),
-                cap.get(7),
-                cap.get(8),
-                cap.get(9),
-            );
-            match groups {
-                (
-                    Some(client),
-                    Some(user_identifier),
-                    Some(userid),
-                    Some(datetime),
-                    Some(method),
-                    Some(request),
-                    Some(protocol),
-                    Some(status),
-                    Some(size),
-                ) => Some(Log {
-                    client: client.as_str(),
-                    user_identifier: user_identifier.as_str(),
-                    userid: userid.as_str(),
-                    datetime: datetime.as_str(),
-                    method: method.as_str(),
-                    request: request.as_str(),
-                    protocol: protocol.as_str(),
-                    status: status.as_str(),
-                    size: size.as_str(),
-                }),
-                _ => None,
-            }
-        });
-
-        for field in fields {
-            print!("{} ", field.client.bright_red());
-            print!("{} ", field.user_identifier.white());
-            print!("{} ", field.userid.white().bold());
-            print!("{} ", field.datetime.bright_magenta());
-            print!(
-                "\"{} {} {}\" ",
-                field.method.bright_cyan(),
-                field.request.cyan(),
-                field.protocol.cyan()
-            );
-            print!("{} ", field.status.bright_yellow());
-            print!("{}", field.size.bright_green());
-            println!();
-        }
-    }
+    result
 }

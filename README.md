@@ -33,10 +33,15 @@ cat logfile.log | splash
 Usage: splash [OPTIONS]
 
 Options:
-  -m, --mode <MODE>  Log Parsing Mode (clf, ad-hoc)
-  -p, --path <PATH>  Path to the log file
-  -h, --help         Print help information
-  -V, --version      Print version information
+  -m, --mode <MODE>                      Log Parsing Mode (clf, ad-hoc)
+  -p, --path <PATH>                      Path to the log file
+  -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain) [default:
+                                         ansi]
+      --list-plugins                     List all available plugins
+      --plugin <PLUGIN>                  Use a specific plugin by name
+      --disable-plugin <DISABLE_PLUGIN>  Disable a specific plugin by name
+  -h, --help                             Print help
+  -V, --version                          Print version
 ```
 
 ---
@@ -78,6 +83,72 @@ splash --mode ad-hoc --path /var/log/syslog
 
 ---
 
+## Output Formats
+
+Every parsing mode can be written out in five formats, selected with `--output`.
+
+### ansi
+
+ANSI escape sequences for a color terminal. This is the default.
+
+```bash
+splash --mode clf --path access.log
+```
+
+### curses
+
+A full-screen scrollable viewer. splash reads the whole input, colorizes it, and shows one
+screenful at a time with a status line giving the visible range.
+
+```bash
+splash --mode clf --path access.log --output curses
+```
+
+| Key | Action |
+| --- | --- |
+| `j`, down arrow | Scroll down one line |
+| `k`, up arrow | Scroll up one line |
+| `f`, space, page down | Scroll down one screen |
+| `b`, page up | Scroll up one screen |
+| `g`, home | Jump to the first line |
+| `G`, end | Jump to the last screen |
+| `q`, escape | Quit |
+
+The viewer needs a terminal. Redirecting its output exits with an error naming the other modes.
+
+### html
+
+A standalone HTML document. Each token becomes a `<span>` with a `splash-*` class, and the
+document carries a stylesheet defining a color for every class, so the colors can be changed
+by editing the CSS.
+
+```bash
+cat access.log | splash --mode clf --output html > access.html
+```
+
+### json
+
+One JSON object per line, holding the line text and the styled tokens it was split into.
+In `clf` mode the token kinds are the Common Log Format field names.
+
+```bash
+cat access.log | splash --mode clf --output json
+```
+
+```json
+{"text":"127.0.0.1 - frank ...","tokens":[{"kind":"client","text":"127.0.0.1"}]}
+```
+
+### plain
+
+The parsed line with no styling, for scripting.
+
+```bash
+cat access.log | splash --mode clf --output plain
+```
+
+---
+
 ## Features
 
 ### Current (v0.1.0)
@@ -97,6 +168,13 @@ splash --mode ad-hoc --path /var/log/syslog
 **Input Sources**
 - File input with live watching
 - Stdin streaming
+
+**Output Formats**
+- ANSI colors (default)
+- Curses viewer with scrolling and vim-style keys
+- HTML with a customizable stylesheet
+- JSON with named token kinds
+- Plain text
 
 ---
 

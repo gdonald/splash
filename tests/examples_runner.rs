@@ -45,9 +45,13 @@ fn run_splash_with_file(mode: &str, filepath: &str) -> Result<String, std::io::E
 
 /// Helper function to run splash with stdin
 fn run_splash_with_stdin(mode: &str, input: &str) -> Result<String, std::io::Error> {
+    run_splash_with_stdin_args(&["--mode", mode], input)
+}
+
+/// Helper function to run splash with stdin and arbitrary arguments
+fn run_splash_with_stdin_args(args: &[&str], input: &str) -> Result<String, std::io::Error> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
-        .arg("--mode")
-        .arg(mode)
+        .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()?;
@@ -399,4 +403,143 @@ fn test_real_world_syslog() {
 
     // Syslog format should work in ad-hoc mode
     assert!(!output.is_empty(), "Should process syslog entries");
+}
+
+// ==================== Output Mode Tests ====================
+
+fn output_modes_example() -> String {
+    std::fs::read_to_string(example_path("output_modes.log"))
+        .expect("example log should be readable")
+}
+
+#[test]
+fn test_plain_output_mode_strips_colors() {
+    let result = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        &output_modes_example(),
+    );
+
+    assert!(result.is_ok());
+    let output = result.unwrap();
+
+    assert!(
+        !output.contains('\u{1b}'),
+        "Plain output should have no escape sequences"
+    );
+    assert!(output.contains("192.168.1.10 GET /index.html HTTP/1.0 200"));
+}
+
+#[test]
+fn test_json_output_mode_emits_one_object_per_line() {
+    let result = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "json"],
+        &output_modes_example(),
+    );
+
+    assert!(result.is_ok());
+    let output = result.unwrap();
+
+    assert_eq!(
+        output.lines().count(),
+        3,
+        "Should emit one JSON object per log line"
+    );
+    for line in output.lines() {
+        assert!(
+            line.starts_with("{\"text\":\""),
+            "Each line should be a JSON object"
+        );
+        assert!(
+            line.ends_with("]}"),
+            "Each line should close its token list"
+        );
+    }
+    assert!(output.contains("\"kind\":\"http_verb\",\"text\":\"GET\""));
+}
+
+#[test]
+fn test_json_output_mode_names_clf_fields() {
+    let input =
+        "127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] \"GET /apache_pb.gif HTTP/1.0\" 200 2326";
+    let result = run_splash_with_stdin_args(&["--mode", "clf", "--output", "json"], input);
+
+    assert!(result.is_ok());
+    let output = result.unwrap();
+
+    assert!(output.contains("\"kind\":\"client\",\"text\":\"127.0.0.1\""));
+    assert!(output.contains("\"kind\":\"status\",\"text\":\"200\""));
+}
+
+#[test]
+fn test_html_output_mode_wraps_the_document() {
+    let result = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "html"],
+        &output_modes_example(),
+    );
+
+    assert!(result.is_ok());
+    let output = result.unwrap();
+
+    assert!(output.starts_with("<!DOCTYPE html>"));
+    assert!(output.contains("<pre class=\"splash\">"));
+    assert!(output.contains("<span class=\"splash-ip\">192.168.1.10</span>"));
+    assert!(output.trim_end().ends_with("</html>"));
+}
+
+#[test]
+fn test_ansi_is_the_default_output_mode() {
+    let with_flag = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "ansi"],
+        &output_modes_example(),
+    );
+    let without_flag = run_splash_with_stdin_args(&["--mode", "ad-hoc"], &output_modes_example());
+
+    assert!(with_flag.is_ok() && without_flag.is_ok());
+    assert_eq!(with_flag.unwrap(), without_flag.unwrap());
+}
+
+#[test]
+fn test_unknown_output_mode_is_rejected() {
+    let result = run_splash(&["--output", "sparkles"]);
+
+    assert!(result.is_ok());
+    let output = result.unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Unknown output mode should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown output mode 'sparkles'"),
+        "stderr was: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_curses_output_mode_requires_a_terminal() {
+    let example = example_path("viewer_scroll.log");
+    let result = run_splash(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "curses",
+        "--path",
+        example.to_str().unwrap(),
+    ]);
+
+    assert!(result.is_ok());
+    let output = result.unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Redirected curses output should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("curses output needs a terminal"),
+        "stderr was: {}",
+        stderr
+    );
 }

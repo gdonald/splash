@@ -29,6 +29,38 @@ impl Plugin for MockPlugin {
     }
 }
 
+/// A plugin that panics while the registry holds its write lock, poisoning it
+struct PanickingPlugin {
+    metadata: PluginMetadata,
+}
+
+impl PanickingPlugin {
+    fn new() -> Self {
+        Self {
+            metadata: PluginMetadata::new(
+                "panicking",
+                PluginVersion::new(1, 0, 0),
+                "Panics when asked for its name",
+                "Test",
+            ),
+        }
+    }
+}
+
+impl Plugin for PanickingPlugin {
+    fn metadata(&self) -> &PluginMetadata {
+        &self.metadata
+    }
+
+    fn name(&self) -> &str {
+        panic!("plugin name is unavailable");
+    }
+
+    fn parse_line(&self, _line: &str) -> ParseResult {
+        ParseResult::NoMatch
+    }
+}
+
 #[test]
 fn test_registry_new() {
     let registry = PluginRegistry::new();
@@ -165,4 +197,100 @@ fn test_registry_version_verification() {
     assert!(registry
         .verify_version("test", &PluginVersion::new(2, 0, 0))
         .is_err());
+}
+
+#[test]
+fn test_describe_plugins_is_empty_for_a_new_registry() {
+    let registry = PluginRegistry::new();
+
+    assert_eq!(registry.describe_plugins(), Ok(vec![]));
+}
+
+#[test]
+fn test_describe_plugins_lists_names_with_versions_in_order() {
+    let registry = PluginRegistry::new();
+    registry
+        .register(Arc::new(MockPlugin::new("syslog", 2, 1, 0)))
+        .unwrap();
+    registry
+        .register(Arc::new(MockPlugin::new("apache", 1, 0, 3)))
+        .unwrap();
+
+    assert_eq!(
+        registry.describe_plugins(),
+        Ok(vec![
+            "apache v1.0.3".to_string(),
+            "syslog v2.1.0".to_string()
+        ])
+    );
+}
+
+#[test]
+fn test_describe_plugins_reports_a_poisoned_registry_as_locked() {
+    let registry = Arc::new(PluginRegistry::new());
+    let poisoner = Arc::clone(&registry);
+
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let panicked = std::thread::spawn(move || {
+        poisoner.register(Arc::new(PanickingPlugin::new())).ok();
+    })
+    .join();
+    std::panic::set_hook(previous_hook);
+
+    assert!(panicked.is_err(), "registering should have panicked");
+    assert_eq!(
+        registry.describe_plugins(),
+        Err(RegistryError::RegistryLocked)
+    );
+}
+
+#[test]
+fn test_plugin_not_found_error_names_the_plugin() {
+    let error = RegistryError::PluginNotFound("syslog".to_string());
+
+    assert_eq!(error.to_string(), "Plugin 'syslog' not found");
+}
+
+#[test]
+fn test_already_registered_error_names_the_plugin() {
+    let error = RegistryError::PluginAlreadyRegistered("syslog".to_string());
+
+    assert_eq!(error.to_string(), "Plugin 'syslog' is already registered");
+}
+
+#[test]
+fn test_incompatible_version_error_names_the_requirement() {
+    let error = RegistryError::IncompatibleVersion {
+        plugin: "syslog".to_string(),
+        required: "2.0.0".to_string(),
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "Plugin 'syslog' has incompatible version (required: 2.0.0)"
+    );
+}
+
+#[test]
+fn test_a_registry_error_is_a_standard_error() {
+    let error = RegistryError::RegistryLocked;
+    let as_error: &dyn std::error::Error = &error;
+
+    assert!(as_error.source().is_none());
+}
+
+#[test]
+fn test_disabling_an_unregistered_plugin_reports_it_missing() {
+    let registry = PluginRegistry::new();
+
+    assert_eq!(
+        registry.disable_plugin("missing"),
+        Err(RegistryError::PluginNotFound("missing".to_string()))
+    );
+}
+
+#[test]
+fn test_a_default_registry_is_empty() {
+    assert_eq!(PluginRegistry::default().count(), 0);
 }
