@@ -4,15 +4,16 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute, terminal};
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config as WatchConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use splash::config::{Config, Options, Profiles, Settings};
 use splash::discovery::PluginDiscovery;
-use splash::output::OutputMode;
 use splash::registry::PluginRegistry;
+use splash::source::LogFile;
 use splash::tui;
-use splash::{plugin_summary, render_contents};
+use splash::{plugin_summary, profile_summary, render_contents, render_file, theme_summary};
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -28,8 +29,40 @@ struct Args {
     path: Option<String>,
 
     /// Output format (ansi, curses, html, json, plain)
-    #[arg(short, long, default_value = "ansi")]
-    output: String,
+    #[arg(short, long)]
+    output: Option<String>,
+
+    /// Worker threads used to render a file (default: one per core)
+    #[arg(short, long)]
+    jobs: Option<usize>,
+
+    /// Config file to read instead of ~/.splash/config.toml or ~/.splashrc
+    #[arg(long)]
+    config: Option<String>,
+
+    /// Color theme (dark, light, solarized, dracula)
+    #[arg(long)]
+    theme: Option<String>,
+
+    /// Override one token color, as KEY=COLOR (repeatable)
+    #[arg(long, value_name = "KEY=COLOR")]
+    color: Vec<String>,
+
+    /// Load a saved color profile
+    #[arg(long)]
+    profile: Option<String>,
+
+    /// Save the resolved colors as a profile and exit
+    #[arg(long, value_name = "NAME")]
+    save_profile: Option<String>,
+
+    /// List saved color profiles
+    #[arg(long)]
+    list_profiles: bool,
+
+    /// List available color themes
+    #[arg(long)]
+    list_themes: bool,
 
     /// List all available plugins
     #[arg(long)]
@@ -47,11 +80,51 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
+    let config = match load_config(args.config.as_deref()) {
+        Ok(config) => config,
+        Err(e) => fail(&e.to_string()),
+    };
+
+    let profiles = Profiles::default_profiles();
+
+    if args.list_themes {
+        print!("{}", theme_summary());
+        return;
+    }
+
+    if args.list_profiles {
+        print!("{}", profile_summary(&profiles));
+        return;
+    }
+
     if args.list_plugins {
         print!(
             "{}",
-            plugin_summary(&PluginRegistry::new(), &PluginDiscovery::new())
+            plugin_summary(&PluginRegistry::new(), &PluginDiscovery::new(), &config)
         );
+        return;
+    }
+
+    let options = Options {
+        mode: args.mode,
+        output: args.output,
+        theme: args.theme,
+        profile: args.profile,
+        colors: args.color,
+        jobs: args.jobs,
+    };
+
+    let settings = match Settings::resolve(&options, &config, &profiles) {
+        Ok(settings) => settings,
+        Err(e) => fail(&e.to_string()),
+    };
+
+    if let Some(name) = args.save_profile {
+        match profiles.save(&name, &settings.theme) {
+            Ok(path) => println!("Saved color profile '{}' to {}", name, path.display()),
+            Err(e) => fail(&e.to_string()),
+        }
+
         return;
     }
 
@@ -66,39 +139,38 @@ fn main() {
         println!("Note: Specific plugin selection will be available in a future version");
     }
 
-    let output_mode: OutputMode = match args.output.parse() {
-        Ok(mode) => mode,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
+    run(args.path.as_deref(), &settings);
+}
 
-    let mode: String = args.mode.unwrap_or_else(|| "ad-hoc".to_string());
+fn run(path: Option<&str>, settings: &Settings) {
+    let mode = settings.mode.as_str();
+    let output_mode = settings.output_mode;
+    let theme = &settings.theme;
 
     if output_mode.is_interactive() {
-        if let Err(e) = view(args.path.as_deref(), &mode, output_mode) {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+        if let Err(e) = view(path, settings) {
+            fail(&e.to_string());
         }
 
         return;
     }
 
-    match args.path {
+    match path {
         Some(p) => {
-            if let Err(e) = watch(p, &mode, output_mode) {
-                eprintln!("Error: {:?}", e);
-                std::process::exit(1);
+            if let Err(e) = watch(p, settings) {
+                fail(&format!("{:?}", e));
             }
         }
         None => {
-            if let Some(header) = output_mode.header() {
+            if let Some(header) = output_mode.header(theme) {
                 print!("{}", header);
             }
 
             for line in std::io::stdin().lines() {
-                print!("{}", render_contents(&line.unwrap(), &mode, output_mode));
+                print!(
+                    "{}",
+                    render_contents(&line.unwrap(), mode, output_mode, theme)
+                );
             }
 
             if let Some(footer) = output_mode.footer() {
@@ -108,10 +180,26 @@ fn main() {
     }
 }
 
-fn watch<P: AsRef<Path>>(path: P, mode: &str, output_mode: OutputMode) -> notify::Result<()> {
+fn load_config(path: Option<&str>) -> Result<Config, splash::config::ConfigError> {
+    match path {
+        Some(path) => Config::load(&PathBuf::from(path)),
+        None => Config::load_default(),
+    }
+}
+
+fn fail(message: &str) -> ! {
+    eprintln!("Error: {}", message);
+    std::process::exit(1);
+}
+
+fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
+    let mode = settings.mode.as_str();
+    let output_mode = settings.output_mode;
+    let theme = &settings.theme;
+
     let (tx, rx) = mpsc::channel();
 
-    let config = Config::default()
+    let config = WatchConfig::default()
         .with_poll_interval(Duration::from_secs(2))
         .with_compare_contents(true);
 
@@ -119,13 +207,14 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str, output_mode: OutputMode) -> notify
 
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
 
-    if let Some(header) = output_mode.header() {
+    if let Some(header) = output_mode.header(theme) {
         print!("{}", header);
     }
 
-    let mut contents = fs::read_to_string(&path).unwrap();
-    print!("{}", render_contents(&contents, mode, output_mode));
-    let mut pos = contents.len() as u64;
+    let rendered = render_file(path.as_ref(), settings).unwrap();
+    print!("{}", rendered);
+    let mut pos = fs::metadata(&path)?.len();
+    let mut contents = String::new();
 
     loop {
         match rx.recv() {
@@ -138,33 +227,36 @@ fn watch<P: AsRef<Path>>(path: P, mode: &str, output_mode: OutputMode) -> notify
                 contents.clear();
                 f.read_to_string(&mut contents).unwrap();
 
-                print!("{}", render_contents(&contents, mode, output_mode));
+                print!("{}", render_contents(&contents, mode, output_mode, theme));
             }
-            Err(e) => {
-                eprintln!("Error: {:?}", e);
-                std::process::exit(1);
-            }
+            Err(e) => fail(&format!("{:?}", e)),
         }
     }
 }
 
 /// Reads the whole input and shows it in the scrollable viewer
-fn view(path: Option<&str>, mode: &str, output_mode: OutputMode) -> io::Result<()> {
+fn view(path: Option<&str>, settings: &Settings) -> io::Result<()> {
     if !io::stdout().is_terminal() {
         return Err(io::Error::other(tui::NEEDS_TERMINAL));
     }
 
-    let contents = match path {
-        Some(p) => fs::read_to_string(p)?,
+    let log = match path {
+        Some(p) => LogFile::open(Path::new(p))?,
         None => {
             let mut buffer = String::new();
             io::stdin().read_to_string(&mut buffer)?;
-            buffer
+            LogFile::from_text(buffer)
         }
     };
 
     let (_, rows) = terminal::size()?;
-    let mut viewer = tui::viewer_for(&contents, mode, output_mode, rows);
+    let mut viewer = tui::viewer_for(
+        log.text(),
+        &settings.mode,
+        settings.output_mode,
+        &settings.theme,
+        rows,
+    );
     let mut out = io::stdout();
 
     enable_raw_mode()?;

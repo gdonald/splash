@@ -5,29 +5,49 @@
 use crate::output::{ParsedLine, Token, TokenKind};
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 
-static MATCHERS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
+/// Patterns are compiled the first time they are used and kept for the rest of
+/// the run, so a pattern a log never exercises costs nothing.
+static IP_ADDR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap());
 
-    m.insert(
-        "ip_addr",
-        Regex::new(r".*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*").unwrap(),
-    );
-    m.insert(
-        "http_verb",
-        Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap(),
-    );
-    m.insert("http_version", Regex::new(r"HTTP/1.0").unwrap());
-    m.insert("number", Regex::new(r"^\d+$").unwrap());
-    m.insert(
-        "datetime",
-        Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap(),
-    );
-    m.insert("tz_offset", Regex::new(r"^[-]?\d{4}$").unwrap());
-
-    m
+static HTTP_VERB: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(.*)(GET|POST|PUT|PATCH|DELETE|HEAD|CONNECT|OPTIONS|TRACE)(.*)").unwrap()
 });
+
+static HTTP_VERSION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"HTTP/1.0").unwrap());
+
+static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+$").unwrap());
+
+static DATETIME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap());
+
+static TZ_OFFSET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-]?\d{4}$").unwrap());
+
+/// Patterns compiled at run time, such as ones read from a config file
+static PATTERN_CACHE: LazyLock<Mutex<HashMap<String, Arc<Regex>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Compiles a pattern the first time it is asked for and hands back the same
+/// compiled pattern on every later call.
+pub fn cached_pattern(pattern: &str) -> Result<Arc<Regex>, regex::Error> {
+    let mut cache = PATTERN_CACHE.lock().unwrap();
+
+    if let Some(compiled) = cache.get(pattern) {
+        return Ok(Arc::clone(compiled));
+    }
+
+    let compiled = Arc::new(Regex::new(pattern)?);
+    cache.insert(pattern.to_string(), Arc::clone(&compiled));
+
+    Ok(compiled)
+}
+
+/// The number of patterns compiled at run time and held in the cache
+pub fn cached_pattern_count() -> usize {
+    PATTERN_CACHE.lock().unwrap().len()
+}
 
 static CLF: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -52,15 +72,11 @@ static CLF: LazyLock<Regex> = LazyLock::new(|| {
 
 const PUNCTUATION: [char; 3] = ['"', '[', ']'];
 
-fn matcher(name: &str) -> &Regex {
-    MATCHERS.get(name).unwrap()
-}
-
 /// Parses one line according to the given mode.
 ///
 /// Returns `None` when the mode has nothing to emit for the line, such as a
 /// blank line or a line that does not match the Common Log Format.
-pub fn parse_line(line: &str, mode: &str) -> Option<ParsedLine> {
+pub fn parse_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> {
     if line.is_empty() {
         return None;
     }
@@ -75,7 +91,7 @@ pub fn parse_line(line: &str, mode: &str) -> Option<ParsedLine> {
 ///
 /// Runs of whitespace collapse to a single space, matching the ad-hoc output
 /// splash has always produced.
-pub fn parse_adhoc_line(line: &str) -> ParsedLine {
+pub fn parse_adhoc_line(line: &str) -> ParsedLine<'_> {
     let mut tokens: Vec<Token> = Vec::new();
 
     for word in line.split_whitespace() {
@@ -89,23 +105,21 @@ pub fn parse_adhoc_line(line: &str) -> ParsedLine {
     ParsedLine::new(tokens)
 }
 
-fn push_word(tokens: &mut Vec<Token>, word: &str) {
-    let mut core = String::new();
+fn push_word<'a>(tokens: &mut Vec<Token<'a>>, word: &'a str) {
+    let mut start = 0;
 
-    for character in word.chars() {
+    for (index, character) in word.char_indices() {
         if PUNCTUATION.contains(&character) {
-            push_core(tokens, &core);
-            core.clear();
-            tokens.push(Token::new(&character.to_string(), TokenKind::Punctuation));
-        } else {
-            core.push(character);
+            push_core(tokens, &word[start..index]);
+            start = index + character.len_utf8();
+            tokens.push(Token::new(&word[index..start], TokenKind::Punctuation));
         }
     }
 
-    push_core(tokens, &core);
+    push_core(tokens, &word[start..]);
 }
 
-fn push_core(tokens: &mut Vec<Token>, core: &str) {
+fn push_core<'a>(tokens: &mut Vec<Token<'a>>, core: &'a str) {
     if core.is_empty() {
         return;
     }
@@ -115,8 +129,7 @@ fn push_core(tokens: &mut Vec<Token>, core: &str) {
         return;
     }
 
-    let verb = matcher("http_verb");
-    if let Some(caps) = verb.captures(core) {
+    if let Some(caps) = HTTP_VERB.captures(core) {
         let before = caps.get(1).unwrap().as_str();
         let matched = caps.get(2).unwrap().as_str();
         let after = caps.get(3).unwrap().as_str();
@@ -136,19 +149,19 @@ fn push_core(tokens: &mut Vec<Token>, core: &str) {
 }
 
 fn whole_word_kind(core: &str) -> Option<TokenKind> {
-    if matcher("number").is_match(core) {
+    if NUMBER.is_match(core) {
         return Some(TokenKind::Number);
     }
-    if matcher("ip_addr").is_match(core) {
+    if IP_ADDR.is_match(core) {
         return Some(TokenKind::Ip);
     }
-    if matcher("datetime").is_match(core) {
+    if DATETIME.is_match(core) {
         return Some(TokenKind::DateTime);
     }
-    if matcher("tz_offset").is_match(core) {
+    if TZ_OFFSET.is_match(core) {
         return Some(TokenKind::TimezoneOffset);
     }
-    if matcher("http_version").is_match(core) {
+    if HTTP_VERSION.is_match(core) {
         return Some(TokenKind::HttpVersion);
     }
 
@@ -156,7 +169,7 @@ fn whole_word_kind(core: &str) -> Option<TokenKind> {
 }
 
 /// Parses a Common Log Format line into its named fields.
-pub fn parse_clf_line(line: &str) -> Option<ParsedLine> {
+pub fn parse_clf_line(line: &str) -> Option<ParsedLine<'_>> {
     let caps = CLF.captures(line)?;
     let field = |index: usize| caps.get(index).unwrap().as_str();
 

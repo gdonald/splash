@@ -1,12 +1,18 @@
 use splash::output::TokenKind;
-use splash::parser::{parse_adhoc_line, parse_clf_line, parse_line};
+use splash::parser::{
+    cached_pattern, cached_pattern_count, parse_adhoc_line, parse_clf_line, parse_line,
+};
+use std::sync::Arc;
 
-fn kinds(line: &splash::output::ParsedLine) -> Vec<TokenKind> {
+fn kinds(line: &splash::output::ParsedLine<'_>) -> Vec<TokenKind> {
     line.tokens.iter().map(|token| token.kind).collect()
 }
 
-fn texts(line: &splash::output::ParsedLine) -> Vec<String> {
-    line.tokens.iter().map(|token| token.text.clone()).collect()
+fn texts(line: &splash::output::ParsedLine<'_>) -> Vec<String> {
+    line.tokens
+        .iter()
+        .map(|token| token.text.to_string())
+        .collect()
 }
 
 #[test]
@@ -89,7 +95,7 @@ fn adhoc_marks_quotes_and_brackets_as_punctuation() {
         .tokens
         .iter()
         .filter(|token| token.kind == TokenKind::Punctuation)
-        .map(|token| token.text.clone())
+        .map(|token| token.text.to_string())
         .collect();
 
     assert_eq!(punctuation, vec!["[", "]", "\"", "\""]);
@@ -119,7 +125,7 @@ fn clf_parses_every_field_of_a_common_log_format_line() {
         .tokens
         .iter()
         .filter(|token| token.kind != TokenKind::Plain && token.kind != TokenKind::Punctuation)
-        .map(|token| (token.kind, token.text.clone()))
+        .map(|token| (token.kind, token.text.to_string()))
         .collect();
 
     assert_eq!(
@@ -173,4 +179,77 @@ fn parse_line_falls_back_to_adhoc_for_an_unknown_mode() {
     let parsed = parse_line("192.168.1.1", "not-a-mode").expect("ad-hoc always parses");
 
     assert_eq!(parsed.tokens[0].kind, TokenKind::Ip);
+}
+
+fn borrows_from(line: &str, text: &str) -> bool {
+    let start = line.as_ptr() as usize;
+    let token = text.as_ptr() as usize;
+
+    token >= start && token + text.len() <= start + line.len()
+}
+
+#[test]
+fn adhoc_tokens_borrow_the_text_of_the_line_they_came_from() {
+    let line = String::from("[INFO] 192.168.1.1 GET /index.html 200");
+    let parsed = parse_adhoc_line(&line);
+
+    for token in &parsed.tokens {
+        if token.text == " " {
+            continue;
+        }
+
+        assert!(borrows_from(&line, token.text), "copied {:?}", token.text);
+    }
+}
+
+#[test]
+fn clf_tokens_borrow_the_text_of_the_line_they_came_from() {
+    let line = String::from(
+        r#"127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326"#,
+    );
+    let parsed = parse_clf_line(&line).expect("line should parse as CLF");
+
+    for token in &parsed.tokens {
+        if token.text == " " || token.text == "\"" {
+            continue;
+        }
+
+        assert!(borrows_from(&line, token.text), "copied {:?}", token.text);
+    }
+}
+
+#[test]
+fn a_pattern_is_compiled_once_and_reused() {
+    let first = cached_pattern(r"^first-pattern-\d+$").unwrap();
+    let second = cached_pattern(r"^first-pattern-\d+$").unwrap();
+
+    assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn a_cached_pattern_still_matches() {
+    let pattern = cached_pattern(r"^worker-\d+$").unwrap();
+
+    assert!(pattern.is_match("worker-12"));
+    assert!(!pattern.is_match("worker"));
+}
+
+#[test]
+fn different_patterns_are_compiled_separately() {
+    let first = cached_pattern("^alpha$").unwrap();
+    let second = cached_pattern("^beta$").unwrap();
+
+    assert!(!Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn caching_a_pattern_counts_it() {
+    cached_pattern("^counted-pattern$").unwrap();
+
+    assert!(cached_pattern_count() >= 1);
+}
+
+#[test]
+fn an_invalid_pattern_is_rejected() {
+    assert!(cached_pattern("(unclosed").is_err());
 }

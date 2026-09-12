@@ -1,10 +1,11 @@
 use splash::output::{
     escape_html, escape_json, OutputMode, ParsedLine, Token, TokenKind, UnknownOutputMode,
 };
+use splash::theme::Theme;
 use std::collections::HashSet;
 use std::error::Error;
 
-fn sample_line() -> ParsedLine {
+fn sample_line() -> ParsedLine<'static> {
     ParsedLine::new(vec![
         Token::new("127.0.0.1", TokenKind::Ip),
         Token::new(" ", TokenKind::Plain),
@@ -23,8 +24,10 @@ fn every_token_kind_has_a_unique_name() {
 
 #[test]
 fn every_token_kind_has_a_six_digit_css_color() {
+    let theme = Theme::default();
+
     for kind in TokenKind::all() {
-        let color = kind.css_color();
+        let color = theme.css(kind);
 
         assert!(
             color.starts_with('#') && color.len() == 7,
@@ -40,7 +43,7 @@ fn every_styled_token_kind_wraps_its_text_in_ansi_escapes() {
     colored::control::set_override(true);
 
     for kind in TokenKind::all() {
-        let colored_text = kind.colorize("sample");
+        let colored_text = Theme::default().colorize(kind, "sample");
 
         assert!(
             colored_text.contains("sample"),
@@ -62,7 +65,10 @@ fn every_styled_token_kind_wraps_its_text_in_ansi_escapes() {
 fn the_plain_token_kind_adds_no_escape_sequences() {
     colored::control::set_override(true);
 
-    assert_eq!(TokenKind::Plain.colorize("sample"), "sample");
+    assert_eq!(
+        Theme::default().colorize(TokenKind::Plain, "sample"),
+        "sample"
+    );
 }
 
 #[test]
@@ -137,21 +143,21 @@ fn output_modes_display_their_names() {
 fn ansi_output_colorizes_each_token() {
     colored::control::set_override(true);
 
-    let rendered = OutputMode::Ansi.render(&sample_line());
+    let rendered = OutputMode::Ansi.render(&sample_line(), &Theme::default());
 
     assert!(rendered.contains("\u{1b}[91m127.0.0.1\u{1b}[0m"));
 }
 
 #[test]
 fn plain_output_strips_all_styling() {
-    let rendered = OutputMode::Plain.render(&sample_line());
+    let rendered = OutputMode::Plain.render(&sample_line(), &Theme::default());
 
     assert_eq!(rendered, "127.0.0.1 \"GET\"");
 }
 
 #[test]
 fn html_output_wraps_each_token_in_a_classed_span() {
-    let rendered = OutputMode::Html.render(&sample_line());
+    let rendered = OutputMode::Html.render(&sample_line(), &Theme::default());
 
     assert_eq!(
         rendered,
@@ -171,18 +177,18 @@ fn json_output_lists_the_line_text_and_its_tokens() {
     ]);
 
     assert_eq!(
-        OutputMode::Json.render(&line),
+        OutputMode::Json.render(&line, &Theme::default()),
         "{\"text\":\"404 \",\"tokens\":[{\"kind\":\"number\",\"text\":\"404\"},{\"kind\":\"plain\",\"text\":\" \"}]}"
     );
 }
 
 #[test]
 fn only_html_output_has_a_header() {
-    assert!(OutputMode::Html.header().is_some());
-    assert!(OutputMode::Ansi.header().is_none());
-    assert!(OutputMode::Curses.header().is_none());
-    assert!(OutputMode::Json.header().is_none());
-    assert!(OutputMode::Plain.header().is_none());
+    assert!(OutputMode::Html.header(&Theme::default()).is_some());
+    assert!(OutputMode::Ansi.header(&Theme::default()).is_none());
+    assert!(OutputMode::Curses.header(&Theme::default()).is_none());
+    assert!(OutputMode::Json.header(&Theme::default()).is_none());
+    assert!(OutputMode::Plain.header(&Theme::default()).is_none());
 }
 
 #[test]
@@ -199,7 +205,7 @@ fn only_html_output_has_a_footer() {
 
 #[test]
 fn the_html_header_opens_a_document_and_a_preformatted_block() {
-    let header = OutputMode::Html.header().unwrap();
+    let header = OutputMode::Html.header(&Theme::default()).unwrap();
 
     assert!(header.starts_with("<!DOCTYPE html>\n"));
     assert!(header.ends_with("<pre class=\"splash\">\n"));
@@ -207,10 +213,21 @@ fn the_html_header_opens_a_document_and_a_preformatted_block() {
 
 #[test]
 fn the_html_header_defines_a_css_rule_for_every_token_kind() {
-    let header = OutputMode::Html.header().unwrap();
+    let header = OutputMode::Html.header(&Theme::default()).unwrap();
 
     for kind in TokenKind::all() {
-        let rule = format!(".splash-{} {{ color: {}; }}", kind.name(), kind.css_color());
+        let theme = Theme::default();
+        let weight = if theme.is_bold(kind) {
+            " font-weight: bold;"
+        } else {
+            ""
+        };
+        let rule = format!(
+            ".splash-{} {{ color: {};{} }}",
+            kind.name(),
+            theme.css(kind),
+            weight
+        );
 
         assert!(header.contains(&rule), "missing rule for {}", kind.name());
     }
@@ -258,7 +275,7 @@ fn curses_output_colorizes_lines_the_same_way_ansi_does() {
     let line = sample_line();
 
     assert_eq!(
-        OutputMode::Curses.render(&line),
-        OutputMode::Ansi.render(&line)
+        OutputMode::Curses.render(&line, &Theme::default()),
+        OutputMode::Ansi.render(&line, &Theme::default())
     );
 }

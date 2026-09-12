@@ -2,6 +2,7 @@ use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use splash::output::OutputMode;
+use splash::theme::Theme;
 use splash::tui::{draw, key_for, run_loop, viewer_for, NEEDS_TERMINAL};
 use splash::viewer::{Key, Viewer};
 use std::io;
@@ -53,7 +54,13 @@ fn the_terminal_requirement_names_the_other_output_modes() {
 
 #[test]
 fn a_viewer_reserves_the_bottom_row_for_the_status_line() {
-    let viewer = viewer_for("a\nb\nc\nd\n", "ad-hoc", OutputMode::Plain, 3);
+    let viewer = viewer_for(
+        "a\nb\nc\nd\n",
+        "ad-hoc",
+        OutputMode::Plain,
+        &Theme::default(),
+        3,
+    );
 
     assert_eq!(viewer.height(), 2);
     assert_eq!(viewer.visible(), ["a", "b"]);
@@ -61,7 +68,7 @@ fn a_viewer_reserves_the_bottom_row_for_the_status_line() {
 
 #[test]
 fn a_viewer_on_a_terminal_with_no_rows_still_shows_one_line() {
-    let viewer = viewer_for("a\nb\n", "ad-hoc", OutputMode::Plain, 0);
+    let viewer = viewer_for("a\nb\n", "ad-hoc", OutputMode::Plain, &Theme::default(), 0);
 
     assert_eq!(viewer.height(), 1);
 }

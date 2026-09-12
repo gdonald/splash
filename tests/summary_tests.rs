@@ -1,9 +1,12 @@
+use splash::config::{Config, Profiles};
 use splash::discovery::PluginDiscovery;
 use splash::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
-use splash::plugin_summary;
 use splash::registry::PluginRegistry;
+use splash::theme::{Theme, PRESETS};
+use splash::{plugin_summary, profile_summary, theme_summary};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 struct NamedPlugin {
     metadata: PluginMetadata,
@@ -69,7 +72,7 @@ fn discovery() -> PluginDiscovery {
 
 #[test]
 fn an_empty_registry_summary_lists_the_built_in_modes() {
-    let summary = plugin_summary(&PluginRegistry::new(), &discovery());
+    let summary = plugin_summary(&PluginRegistry::new(), &discovery(), &Config::default());
 
     assert_eq!(
         summary,
@@ -93,7 +96,7 @@ fn a_registered_plugin_appears_with_its_version() {
         .register(Arc::new(NamedPlugin::new("syslog")))
         .unwrap();
 
-    let summary = plugin_summary(&registry, &discovery());
+    let summary = plugin_summary(&registry, &discovery(), &Config::default());
 
     assert!(summary.contains("  syslog v1.2.3\n"));
     assert!(!summary.contains("No plugins currently registered"));
@@ -112,7 +115,7 @@ fn a_poisoned_registry_is_reported_in_the_summary() {
     .join();
     std::panic::set_hook(previous_hook);
 
-    let summary = plugin_summary(&registry, &discovery());
+    let summary = plugin_summary(&registry, &discovery(), &Config::default());
 
     assert!(summary.contains("Error listing plugins: Registry is locked for modifications\n"));
 }
@@ -124,9 +127,72 @@ fn the_summary_lists_every_discovery_path() {
         PathBuf::from("/usr/share/splash"),
     ]);
 
-    let summary = plugin_summary(&PluginRegistry::new(), &discovery);
+    let summary = plugin_summary(&PluginRegistry::new(), &discovery, &Config::default());
 
     assert!(
         summary.ends_with("Plugin discovery paths:\n  /opt/splash/plugins\n  /usr/share/splash\n")
     );
+}
+
+fn configured() -> Config {
+    Config::parse(
+        "[plugins.syslog]\nfacility = \"cyan\"\n\n[plugins.squid]\nenabled = \"false\"\n",
+        "test.toml",
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_summary_lists_the_settings_configured_for_each_plugin() {
+    let summary = plugin_summary(&PluginRegistry::new(), &discovery(), &configured());
+
+    assert!(summary.ends_with(
+        "Plugin configuration:\n  squid (disabled)\n    enabled = false\n  syslog (enabled)\n    facility = cyan\n"
+    ));
+}
+
+#[test]
+fn the_summary_has_no_configuration_section_without_configured_plugins() {
+    let summary = plugin_summary(&PluginRegistry::new(), &discovery(), &Config::default());
+
+    assert!(!summary.contains("Plugin configuration"));
+}
+
+#[test]
+fn the_profile_summary_lists_the_saved_profiles() {
+    let home = TempDir::new().unwrap();
+    let profiles = Profiles::in_home(home.path());
+    profiles.save("night", &Theme::dark()).unwrap();
+
+    let summary = profile_summary(&profiles);
+
+    assert!(summary.starts_with("Saved Color Profiles:\n=====================\n  night\n"));
+    assert!(summary.ends_with(&format!(
+        "\nProfile directory:\n  {}\n",
+        profiles.root().display()
+    )));
+}
+
+#[test]
+fn the_profile_summary_says_when_nothing_is_saved() {
+    let home = TempDir::new().unwrap();
+
+    let summary = profile_summary(&Profiles::in_home(home.path()));
+
+    assert!(summary.contains("No color profiles saved.\n"));
+}
+
+#[test]
+fn the_theme_summary_lists_every_preset() {
+    let summary = theme_summary();
+
+    assert!(summary.starts_with("Available Themes:\n=================\n"));
+
+    for name in PRESETS {
+        assert!(
+            summary.contains(&format!("  {}\n", name)),
+            "missing {}",
+            name
+        );
+    }
 }

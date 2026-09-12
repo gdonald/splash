@@ -4,6 +4,7 @@
 //! drawing and the event loop run without a terminal attached.
 use crate::output::OutputMode;
 use crate::render_lines;
+use crate::theme::Theme;
 use crate::viewer::{Key, Outcome, Viewer};
 use crossterm::event::{Event, KeyEvent, KeyEventKind};
 use crossterm::{cursor, queue, terminal};
@@ -14,9 +15,15 @@ pub const NEEDS_TERMINAL: &str =
     "curses output needs a terminal; use --output ansi, html, json, or plain when redirecting";
 
 /// Builds a viewer over rendered log text, reserving the bottom row for the status line
-pub fn viewer_for(contents: &str, mode: &str, output_mode: OutputMode, rows: u16) -> Viewer {
+pub fn viewer_for(
+    contents: &str,
+    mode: &str,
+    output_mode: OutputMode,
+    theme: &Theme,
+    rows: u16,
+) -> Viewer {
     Viewer::new(
-        render_lines(contents, mode, output_mode),
+        render_lines(contents, mode, output_mode, theme),
         rows.saturating_sub(1) as usize,
     )
 }

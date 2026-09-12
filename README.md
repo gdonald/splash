@@ -35,14 +35,93 @@ Usage: splash [OPTIONS]
 Options:
   -m, --mode <MODE>                      Log Parsing Mode (clf, ad-hoc)
   -p, --path <PATH>                      Path to the log file
-  -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain) [default:
-                                         ansi]
+  -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain)
+  -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
+                                         core)
+      --config <CONFIG>                  Config file to read instead of ~/.splash/config.toml or
+                                         ~/.splashrc
+      --theme <THEME>                    Color theme (dark, light, solarized, dracula)
+      --color <KEY=COLOR>                Override one token color, as KEY=COLOR (repeatable)
+      --profile <PROFILE>                Load a saved color profile
+      --save-profile <NAME>              Save the resolved colors as a profile and exit
+      --list-profiles                    List saved color profiles
+      --list-themes                      List available color themes
       --list-plugins                     List all available plugins
       --plugin <PLUGIN>                  Use a specific plugin by name
       --disable-plugin <DISABLE_PLUGIN>  Disable a specific plugin by name
   -h, --help                             Print help
   -V, --version                          Print version
 ```
+
+---
+
+## Configuration
+
+splash reads `~/.splash/config.toml`, falling back to `~/.splashrc`. Both use the same format.
+`--config PATH` reads a different file instead.
+
+```toml
+# Defaults used when the command line does not say otherwise
+mode = "clf"
+output = "ansi"
+theme = "dracula"
+jobs = "4"
+
+# Repaint individual fields
+[colors]
+ip = "bright cyan"
+status = "white bold"
+
+# Settings for one plugin
+[plugins.syslog]
+enabled = "true"
+facility = "cyan"
+```
+
+Command line options win over the config file. Colors are layered: the theme or profile first,
+then the file's `[colors]` table, then any `--color` overrides.
+
+### Themes
+
+`--theme NAME` selects one of the presets `dark` (the default), `light`, `solarized`, and
+`dracula`. `--list-themes` prints them. A theme sets a color for every token kind and the page
+colors used by HTML output.
+
+```bash
+splash --mode clf --path access.log --theme solarized
+```
+
+### Color overrides
+
+`--color KEY=COLOR` repaints one token kind. The key is the kind name used in JSON output and in
+HTML class names: `plain`, `punctuation`, `ip`, `number`, `datetime`, `tz_offset`, `http_verb`,
+`http_version`, `client`, `user_identifier`, `userid`, `timestamp`, `method`, `request`,
+`protocol`, `status`, and `size`.
+
+A color is one of the sixteen ANSI color names (`red`, `bright cyan`, `gray`), a hex value
+(`#ff5555`), or either of those followed by `bold`.
+
+```bash
+splash --mode clf --path access.log --color ip=bright_cyan --color status="white bold"
+```
+
+### Color profiles
+
+`--save-profile NAME` writes the colors splash resolved to `~/.splash/profiles/NAME.toml`, and
+`--profile NAME` loads them back. `--list-profiles` prints the saved profiles.
+
+```bash
+splash --theme solarized --color ip=green --save-profile work
+splash --mode clf --path access.log --profile work
+```
+
+A profile is a config file holding a `theme` key and a `[colors]` table, so it can also be edited
+by hand.
+
+### Per-plugin settings
+
+A `[plugins.NAME]` table holds settings for one plugin. `enabled = "false"` turns a plugin off.
+`--list-plugins` prints each configured plugin and its settings.
 
 ---
 
@@ -149,6 +228,39 @@ cat access.log | splash --mode clf --output plain
 
 ---
 
+## Performance
+
+Parsed tokens borrow the text of the line they came from, so a line is read once and never copied
+on its way to the renderer. Patterns are compiled the first time they are needed and kept for the
+rest of the run, and patterns supplied at run time are cached by `parser::cached_pattern`.
+
+Files are read whole and rendered before splash starts watching for new lines. A file of 64 KiB or
+more is memory mapped rather than read into memory, and its lines are split across worker threads.
+`--jobs N` sets the worker count, which defaults to one per core. Inputs under 512 lines are
+rendered on one thread, where splitting the work costs more than it saves.
+
+```bash
+splash --mode clf --path /var/log/apache2/access.log --jobs 8
+```
+
+### Benchmarks
+
+`cargo bench` times splash against itself at several settings and, when ccze is installed, against
+ccze over the same log.
+
+```
+Rendering 20000 log lines
+  splash clf ansi                 20000 lines in    33.636 ms        594603 lines/sec    1.00x
+  splash clf ansi -j 18           20000 lines in     5.355 ms       3734740 lines/sec    6.28x
+  splash clf plain                20000 lines in    18.454 ms       1083771 lines/sec    1.82x
+  splash ad-hoc ansi              20000 lines in    36.841 ms        542869 lines/sec    0.91x
+```
+
+The numbers above are from one machine, on a generated Common Log Format sample. Run the benchmark
+on yours before drawing conclusions from them.
+
+---
+
 ## Features
 
 ### Current (v0.1.0)
@@ -167,7 +279,21 @@ cat access.log | splash --mode clf --output plain
 
 **Input Sources**
 - File input with live watching
+- Memory-mapped reads for files of 64 KiB or more
 - Stdin streaming
+
+**Performance**
+- Parsing that borrows the input rather than copying it
+- Patterns compiled on first use and cached
+- Rendering split across worker threads, set with `--jobs`
+- `cargo bench` benchmark suite, comparing to ccze when it is installed
+
+**Configuration**
+- `~/.splash/config.toml` and `~/.splashrc` config files
+- Per-plugin settings
+- Color themes: dark, light, solarized, dracula
+- Per-field color overrides from the command line
+- Saved color profiles
 
 **Output Formats**
 - ANSI colors (default)
