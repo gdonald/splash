@@ -3,6 +3,8 @@
 /// Parsing is separated from rendering so that a single parse of a log line
 /// can be emitted as ANSI, HTML, JSON, or plain text.
 use crate::output::{ParsedLine, Token, TokenKind};
+use crate::plugin::ParseResult;
+use crate::registry;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -72,6 +74,32 @@ static CLF: LazyLock<Regex> = LazyLock::new(|| {
 
 const PUNCTUATION: [char; 3] = ['"', '[', ']'];
 
+/// An IPv4 address anywhere inside a free text message
+static MESSAGE_IP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap());
+
+/// Colors any addresses inside a free text message, leaving the rest of the
+/// message in the message style.
+pub fn push_message<'a>(tokens: &mut Vec<Token<'a>>, message: &'a str) {
+    let mut cursor = 0;
+
+    for found in MESSAGE_IP.find_iter(message) {
+        if found.start() > cursor {
+            tokens.push(Token::new(
+                &message[cursor..found.start()],
+                TokenKind::Message,
+            ));
+        }
+
+        tokens.push(Token::new(found.as_str(), TokenKind::Ip));
+        cursor = found.end();
+    }
+
+    if cursor < message.len() {
+        tokens.push(Token::new(&message[cursor..], TokenKind::Message));
+    }
+}
+
 /// Parses one line according to the given mode.
 ///
 /// Returns `None` when the mode has nothing to emit for the line, such as a
@@ -83,7 +111,13 @@ pub fn parse_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> {
 
     match mode {
         "clf" => parse_clf_line(line),
-        _ => Some(parse_adhoc_line(line)),
+        _ => match registry::builtins().get(mode) {
+            Ok(plugin) => match plugin.parse_line(line) {
+                ParseResult::Parsed(parsed) => Some(parsed),
+                ParseResult::NoMatch | ParseResult::Error(_) => None,
+            },
+            Err(_) => Some(parse_adhoc_line(line)),
+        },
     }
 }
 

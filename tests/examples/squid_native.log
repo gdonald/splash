@@ -1,0 +1,6 @@
+1614729600.123    123 10.0.0.5 TCP_MISS/200 4512 GET http://example.com/ - HIER_DIRECT/93.184.216.34 text/html
+1614729601.004     12 10.0.0.42 TCP_MEM_HIT/200 8810 GET http://example.com/app.css alice NONE/- text/css
+1614729601.550     88 10.0.0.42 TCP_REFRESH_HIT/304 221 GET http://example.com/logo.png alice HIER_DIRECT/93.184.216.34 image/png
+1614729602.900      0 192.168.1.50 TCP_DENIED/403 3621 CONNECT example.com:443 - HIER_NONE/- text/html
+1614729603.410   1902 172.16.4.9 TCP_MISS/504 0 GET http://slow.example.com/report - HIER_DIRECT/203.0.113.7 -
+1614729604.077     45 10.0.0.5 TCP_CLIENT_REFRESH_MISS/200 90211 GET http://example.com/app.js - HIER_DIRECT/93.184.216.34 application/javascript

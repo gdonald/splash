@@ -20,7 +20,7 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Log Parsing Mode (clf, ad-hoc)
+    /// Log Parsing Mode (caddy, clf, haproxy, httpd, squid, varnish, ad-hoc)
     #[arg(short, long)]
     mode: Option<String>,
 
@@ -100,7 +100,11 @@ fn main() {
     if args.list_plugins {
         print!(
             "{}",
-            plugin_summary(&PluginRegistry::new(), &PluginDiscovery::new(), &config)
+            plugin_summary(
+                &PluginRegistry::with_builtins(),
+                &PluginDiscovery::new(),
+                &config
+            )
         );
         return;
     }

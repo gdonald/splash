@@ -1,0 +1,25 @@
+*   << Request  >> 32770
+-   Begin          req 32769 rxreq
+-   Timestamp      Start: 1614729600.123456 0.000000 0.000000
+-   ReqStart       10.0.0.5 54321 a0
+-   ReqMethod      GET
+-   ReqURL         /index.html
+-   ReqProtocol    HTTP/1.1
+-   ReqHeader      Host: example.com
+-   ReqHeader      User-Agent: curl/8.4.0
+-   VCL_call       RECV
+-   VCL_return     hash
+-   RespStatus     200
+-   RespReason     OK
+-   RespHeader     Content-Type: text/html
+-   ReqAcct        75 0 75 245 4512 4757
+-   End
+**  << BeReq    >> 32771
+--  Begin          bereq 32770 fetch
+--  BereqMethod    GET
+--  BereqURL       /index.html
+--  BereqProtocol  HTTP/1.1
+--  BereqHeader    Host: example.com
+--  BerespStatus   200
+--  BerespHeader   Content-Type: text/html
+--  End

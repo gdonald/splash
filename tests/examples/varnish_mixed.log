@@ -1,0 +1,4 @@
+*   << Request  >> 32770
+-   ReqMethod      GET
+        32770 RespStatus     c 200
+the maintenance window moves to 02:00

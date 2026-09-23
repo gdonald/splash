@@ -2,6 +2,7 @@
 ///
 /// This module provides the plugin trait and infrastructure for implementing
 /// custom log format parsers that can be dynamically loaded and registered.
+use crate::output::ParsedLine;
 use std::fmt;
 
 /// Version information for a plugin
@@ -68,10 +69,13 @@ impl PluginMetadata {
 }
 
 /// Result of parsing a log line
-#[allow(dead_code)]
-pub enum ParseResult {
-    /// Successfully parsed with colorized output
-    Parsed(String),
+///
+/// A parsed line borrows the text it was parsed from, so a plugin hands back
+/// styled tokens rather than a string it has already painted. Every output
+/// mode can then render the same tokens.
+pub enum ParseResult<'a> {
+    /// Successfully parsed into styled tokens
+    Parsed(ParsedLine<'a>),
     /// Line doesn't match this plugin's format
     NoMatch,
     /// Error occurred during parsing
@@ -96,7 +100,7 @@ pub trait Plugin: Send + Sync {
 
     /// Attempts to parse a single log line
     /// Returns ParseResult indicating success, no match, or error
-    fn parse_line(&self, line: &str) -> ParseResult;
+    fn parse_line<'a>(&self, line: &'a str) -> ParseResult<'a>;
 
     /// Returns true if this plugin can likely parse the given line
     /// Used for auto-detection. Default implementation tries to parse.

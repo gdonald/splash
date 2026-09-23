@@ -2,9 +2,14 @@
 ///
 /// This module provides the registry system for loading, storing, and
 /// querying available log format plugins.
+use crate::caddy::CaddyPlugin;
+use crate::haproxy::HaproxyPlugin;
+use crate::httpd::HttpdPlugin;
 use crate::plugin::{Plugin, PluginVersion};
+use crate::squid::SquidPlugin;
+use crate::varnish::VarnishPlugin;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 /// Error types for the plugin registry
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +51,33 @@ pub struct PluginRegistry {
 
 #[allow(dead_code)]
 impl PluginRegistry {
+    /// Creates a registry holding every plugin splash ships with
+    pub fn with_builtins() -> Self {
+        let registry = PluginRegistry::new();
+
+        registry
+            .register(Arc::new(CaddyPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(HaproxyPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(HttpdPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(SquidPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(VarnishPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+    }
+
     /// Creates a new empty plugin registry
     pub fn new() -> Self {
         Self {
@@ -214,4 +246,12 @@ impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The registry every parsing mode is looked up in, built once per run
+static BUILTINS: LazyLock<PluginRegistry> = LazyLock::new(PluginRegistry::with_builtins);
+
+/// The shared registry of plugins splash ships with
+pub fn builtins() -> &'static PluginRegistry {
+    &BUILTINS
 }

@@ -926,3 +926,813 @@ fn test_a_worker_count_of_zero_exits_non_zero() {
         stderr
     );
 }
+
+// ==================== Apache and nginx Tests ====================
+
+#[test]
+fn test_httpd_mode_colors_the_referer_and_user_agent_of_a_combined_log() {
+    let example = example_path("httpd_combined.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"referer","text":"http://www.example.com/start.html"}"#),
+        "the referer should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"user_agent","text":"curl/8.4.0"}"#),
+        "the user agent should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_httpd_mode_reads_every_line_of_a_combined_log() {
+    let example = example_path("httpd_combined.log");
+    let output = run_splash_with_file("httpd", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 4);
+}
+
+#[test]
+fn test_httpd_mode_colors_the_server_name_of_a_vhost_combined_log() {
+    let example = example_path("httpd_vhost_combined.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"vhost","text":"reports.example.com:443"}"#),
+        "the server name should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_httpd_mode_colors_the_request_time_of_an_extended_log() {
+    let example = example_path("httpd_extended.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"duration","text":"48210"}"#),
+        "the trailing request time should be colored as a duration"
+    );
+}
+
+#[test]
+fn test_httpd_mode_separates_the_module_and_level_of_an_apache_error_log() {
+    let example = example_path("httpd_apache_error.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"module","text":"proxy_fcgi"}"#),
+        "the module should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"level","text":"warn"}"#),
+        "the level should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_httpd_mode_colors_the_worker_of_an_nginx_error_log() {
+    let example = example_path("httpd_nginx_error.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"pid","text":"1200#0"}"#),
+        "the worker and thread should be colored as one field"
+    );
+}
+
+#[test]
+fn test_httpd_mode_reads_every_line_of_an_nginx_error_log() {
+    let example = example_path("httpd_nginx_error.log");
+    let output = run_splash_with_file("httpd", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 4);
+}
+
+#[test]
+fn test_httpd_mode_drops_a_line_that_is_not_a_web_server_log() {
+    let example = example_path("httpd_mixed.log");
+    let output = run_splash_with_file("httpd", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 5);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_httpd_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("httpd_mixed.log");
+    let contents = example_contents("httpd_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_apache_and_nginx_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("httpd v1.0.0"),
+        "--list-plugins should name the built-in httpd plugin"
+    );
+}
+
+// ==================== Squid Tests ====================
+
+#[test]
+fn test_squid_mode_colors_a_cache_hit_and_a_cache_miss_differently() {
+    let example = example_path("squid_native.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "squid",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"cache_miss","text":"TCP_MISS"}"#),
+        "a fetched request should be colored as a cache miss"
+    );
+    assert!(
+        output.contains(r#"{"kind":"cache_hit","text":"TCP_MEM_HIT"}"#),
+        "a cached request should be colored as a cache hit"
+    );
+}
+
+#[test]
+fn test_squid_mode_gives_a_denied_request_the_neutral_result_style() {
+    let example = example_path("squid_native.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "squid",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"cache_result","text":"TCP_DENIED"}"#),
+        "a denied request is neither a hit nor a miss"
+    );
+}
+
+#[test]
+fn test_squid_mode_colors_the_hierarchy_and_content_type_of_a_native_log() {
+    let example = example_path("squid_native.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "squid",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"hierarchy","text":"HIER_DIRECT"}"#),
+        "the hierarchy code should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"content_type","text":"application/javascript"}"#),
+        "the content type should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_squid_mode_reads_every_line_of_a_native_log() {
+    let example = example_path("squid_native.log");
+    let output = run_splash_with_file("squid", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 6);
+}
+
+#[test]
+fn test_squid_mode_reads_the_result_code_appended_to_an_httpd_emulated_log() {
+    let example = example_path("squid_emulated.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "squid",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"cache_hit","text":"TCP_MEM_HIT"}"#),
+        "the appended result code should be colored as a cache hit"
+    );
+}
+
+#[test]
+fn test_squid_mode_reads_every_line_of_an_httpd_emulated_log() {
+    let example = example_path("squid_emulated.log");
+    let output = run_splash_with_file("squid", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_squid_mode_drops_a_line_that_is_not_an_access_log() {
+    let example = example_path("squid_mixed.log");
+    let output = run_splash_with_file("squid", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 2);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in neither format should be dropped"
+    );
+}
+
+#[test]
+fn test_squid_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("squid_mixed.log");
+    let contents = example_contents("squid_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "squid",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_squid_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("squid v1.0.0"),
+        "--list-plugins should name the built-in squid plugin"
+    );
+}
+
+// ==================== Varnish Tests ====================
+
+#[test]
+fn test_varnish_mode_colors_the_transaction_a_header_opens() {
+    let example = example_path("varnish_transaction.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "varnish",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"transaction","text":"Request"}"#),
+        "the client transaction should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"transaction","text":"BeReq"}"#),
+        "the backend transaction should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_varnish_mode_colors_a_record_tag_apart_from_its_payload() {
+    let example = example_path("varnish_transaction.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "varnish",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"tag","text":"ReqMethod"}"#),
+        "the tag should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"method","text":"GET"}"#),
+        "the payload of a method record should be colored as a method"
+    );
+}
+
+#[test]
+fn test_varnish_mode_colors_a_header_name_apart_from_its_value() {
+    let example = example_path("varnish_transaction.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "varnish",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"header","text":"User-Agent"}"#),
+        "the header name should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_varnish_mode_reads_every_line_of_a_transaction_log() {
+    let example = example_path("varnish_transaction.log");
+    let output = run_splash_with_file("varnish", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 25);
+}
+
+#[test]
+fn test_varnish_mode_colors_the_side_a_raw_record_came_from() {
+    let example = example_path("varnish_raw.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "varnish",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"transaction","text":"b"}"#),
+        "a backend record should be marked as coming from the backend"
+    );
+    assert!(
+        output.contains(r#"{"kind":"status","text":"503"}"#),
+        "the payload of a backend status record should be colored as a status"
+    );
+}
+
+#[test]
+fn test_varnish_mode_reads_every_line_of_a_raw_log() {
+    let example = example_path("varnish_raw.log");
+    let output = run_splash_with_file("varnish", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 9);
+}
+
+#[test]
+fn test_varnish_mode_drops_a_line_that_is_not_a_varnish_log() {
+    let example = example_path("varnish_mixed.log");
+    let output = run_splash_with_file("varnish", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_varnish_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("varnish_mixed.log");
+    let contents = example_contents("varnish_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "varnish",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_varnish_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("varnish v1.0.0"),
+        "--list-plugins should name the built-in varnish plugin"
+    );
+}
+
+// ==================== HAProxy Tests ====================
+
+#[test]
+fn test_haproxy_mode_colors_the_frontend_backend_and_server_of_a_connection() {
+    let example = example_path("haproxy_http.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "haproxy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"frontend","text":"http-in"}"#),
+        "the frontend should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"backend","text":"api"}"#),
+        "the backend should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"server","text":"srv2"}"#),
+        "the server should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_haproxy_mode_colors_the_timers_and_termination_state_of_a_connection() {
+    let example = example_path("haproxy_http.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "haproxy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"timers","text":"10/0/30/69/109"}"#),
+        "the timers should be colored as one field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"termination","text":"SC--"}"#),
+        "the termination state should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_haproxy_mode_colors_the_request_an_http_log_ends_with() {
+    let example = example_path("haproxy_http.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "haproxy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"request","text":"/api/orders"}"#),
+        "the requested path should be colored as a request"
+    );
+}
+
+#[test]
+fn test_haproxy_mode_reads_every_line_of_an_http_log() {
+    let example = example_path("haproxy_http.log");
+    let output = run_splash_with_file("haproxy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 4);
+}
+
+#[test]
+fn test_haproxy_mode_colors_the_shorter_termination_state_of_a_tcp_log() {
+    let example = example_path("haproxy_tcp.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "haproxy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"termination","text":"cD"}"#),
+        "a tcp termination state is two characters"
+    );
+}
+
+#[test]
+fn test_haproxy_mode_reads_every_line_of_a_tcp_log() {
+    let example = example_path("haproxy_tcp.log");
+    let output = run_splash_with_file("haproxy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_haproxy_mode_colors_the_listener_that_refused_a_connection() {
+    let example = example_path("haproxy_error.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "haproxy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"frontend","text":"https-in"}"#),
+        "the frontend should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"server","text":"ssl"}"#),
+        "the listener should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_haproxy_mode_reads_every_line_of_an_error_log() {
+    let example = example_path("haproxy_error.log");
+    let output = run_splash_with_file("haproxy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_haproxy_mode_drops_a_line_that_is_not_a_haproxy_log() {
+    let example = example_path("haproxy_mixed.log");
+    let output = run_splash_with_file("haproxy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 4);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_haproxy_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("haproxy_mixed.log");
+    let contents = example_contents("haproxy_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "haproxy",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_haproxy_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("haproxy v1.0.0"),
+        "--list-plugins should name the built-in haproxy plugin"
+    );
+}
+
+// ==================== Caddy Tests ====================
+
+#[test]
+fn test_caddy_mode_colors_the_fields_nested_inside_the_request() {
+    let example = example_path("caddy_access.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "caddy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"ip","text":"10.0.0.42"}"#),
+        "the remote address should be colored as an address"
+    );
+    assert!(
+        output.contains(r#"{"kind":"method","text":"POST"}"#),
+        "the method should be colored as a method"
+    );
+    assert!(
+        output.contains(r#"{"kind":"request","text":"/orders"}"#),
+        "the uri should be colored as a request"
+    );
+}
+
+#[test]
+fn test_caddy_mode_colors_the_status_size_and_duration_of_a_request() {
+    let example = example_path("caddy_access.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "caddy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"status","text":"404"}"#),
+        "the status should be colored as a status"
+    );
+    assert!(
+        output.contains(r#"{"kind":"size","text":"10900"}"#),
+        "the response size should be colored as a size"
+    );
+    assert!(
+        output.contains(r#"{"kind":"duration","text":"0.048211"}"#),
+        "how long the request took should be colored as a duration"
+    );
+}
+
+#[test]
+fn test_caddy_mode_colors_every_key_of_the_object_as_a_key() {
+    let example = example_path("caddy_access.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "caddy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"header","text":"Content-Type"}"#),
+        "a header name nested in the request should be colored as a key"
+    );
+}
+
+#[test]
+fn test_caddy_mode_reads_every_line_of_an_access_log() {
+    let example = example_path("caddy_access.log");
+    let output = run_splash_with_file("caddy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_caddy_mode_colors_the_level_and_the_error_of_an_error_log() {
+    let example = example_path("caddy_error.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "caddy",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"level","text":"warn"}"#),
+        "the level should be colored as a level"
+    );
+    assert!(
+        output.contains(r#"{"kind":"message","text":"context canceled"}"#),
+        "the error should be colored as message text"
+    );
+}
+
+#[test]
+fn test_caddy_mode_reads_every_line_of_an_error_log() {
+    let example = example_path("caddy_error.log");
+    let output = run_splash_with_file("caddy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_caddy_mode_drops_a_line_that_is_not_json() {
+    let example = example_path("caddy_mixed.log");
+    let output = run_splash_with_file("caddy", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 2);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line that is not a json object should be dropped"
+    );
+}
+
+#[test]
+fn test_caddy_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("caddy_mixed.log");
+    let contents = example_contents("caddy_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "caddy",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_caddy_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("caddy v1.0.0"),
+        "--list-plugins should name the built-in caddy plugin"
+    );
+}

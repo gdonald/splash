@@ -15,6 +15,21 @@ cargo install --path .
 # Colorize a log file (Common Log Format)
 splash --mode clf --path /var/log/apache2/access.log
 
+# Colorize Apache and nginx access and error logs
+splash --mode httpd --path /var/log/nginx/error.log
+
+# Colorize a Squid access log, marking cache hits and misses
+splash --mode squid --path /var/log/squid/access.log
+
+# Colorize a Varnish transaction log
+varnishlog | splash --mode varnish
+
+# Colorize a HAProxy log
+splash --mode haproxy --path /var/log/haproxy.log
+
+# Colorize Caddy's structured JSON logs
+splash --mode caddy --path /var/log/caddy/access.log
+
 # Colorize with ad-hoc mode (auto-detects patterns)
 splash --mode ad-hoc --path /var/log/syslog
 
@@ -33,7 +48,8 @@ cat logfile.log | splash
 Usage: splash [OPTIONS]
 
 Options:
-  -m, --mode <MODE>                      Log Parsing Mode (clf, ad-hoc)
+  -m, --mode <MODE>                      Log Parsing Mode (caddy, clf, haproxy, httpd, squid,
+                                         varnish, ad-hoc)
   -p, --path <PATH>                      Path to the log file
   -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain)
   -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
@@ -96,7 +112,10 @@ splash --mode clf --path access.log --theme solarized
 `--color KEY=COLOR` repaints one token kind. The key is the kind name used in JSON output and in
 HTML class names: `plain`, `punctuation`, `ip`, `number`, `datetime`, `tz_offset`, `http_verb`,
 `http_version`, `client`, `user_identifier`, `userid`, `timestamp`, `method`, `request`,
-`protocol`, `status`, and `size`.
+`protocol`, `status`, `size`, `referer`, `user_agent`, `vhost`, `duration`, `level`,
+`module`, `pid`, `message`, `cache_hit`, `cache_miss`, `cache_result`, `hierarchy`, and
+`content_type`, `transaction`, `tag`, `header`, `host`, `frontend`, `backend`, `server`,
+`timers`, `termination`, and `counters`.
 
 A color is one of the sixteen ANSI color names (`red`, `bright cyan`, `gray`), a hex value
 (`#ff5555`), or either of those followed by `bold`.
@@ -142,6 +161,159 @@ splash --mode clf --path /var/log/apache2/access.log
 ```
 
 **Note:** Nothing will be shown if the log file is not actually formatted in CLF format. Use ad-hoc mode if you are unsure.
+
+### Apache and nginx (httpd)
+
+Reads the four shapes an Apache or nginx log takes. Each line is tried against them in turn and the
+first that fits wins, so an access log and an error log can be colorized with the same mode.
+
+**Example:**
+```bash
+splash --mode httpd --path /var/log/apache2/access.log
+splash --mode httpd --path /var/log/nginx/error.log
+```
+
+**Combined access log**, the Common Log Format plus a quoted referer and user agent:
+```
+127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326 "http://www.example.com/start.html" "Mozilla/5.0"
+```
+
+**vhost combined access log**, which prefixes the server name:
+```
+example.com:80 10.0.0.42 - - [10/Oct/2000:13:55:37 -0700] "GET / HTTP/1.1" 200 512 "-" "curl/8.4.0"
+```
+
+**Extended access log**, whose trailing fields follow the user agent. A field of digits alone is
+the microseconds the server spent on the request, colored as `duration`:
+```
+127.0.0.1 - - [10/Oct/2000:13:55:36 -0700] "GET /index.html HTTP/1.1" 200 4512 "-" "Mozilla/5.0" 1532
+```
+
+**Apache error log**, whose module, level, process, and client are each colored separately:
+```
+[Wed Oct 11 14:32:52.123456 2023] [core:error] [pid 35708:tid 4328636416] [client 72.15.99.187:1234] AH00128: File does not exist
+```
+
+**nginx error log**:
+```
+2023/10/11 14:32:52 [error] 1234#0: *1 open() failed (2: No such file or directory), client: 10.0.0.9
+```
+
+A plain Common Log Format line is read too, and addresses inside an error message are colored. A
+line in none of these formats is dropped.
+
+### Squid
+
+Reads a Squid access log in either shape it is written in, and colors the result code by whether
+Squid served the request from its cache. A code ending in `_HIT` is a cache hit, one ending in
+`_MISS` is a cache miss, and anything else, such as `TCP_DENIED`, gets a neutral style.
+
+**Example:**
+```bash
+splash --mode squid --path /var/log/squid/access.log
+```
+
+**Native format**, which leads with a Unix timestamp and pads its fields to fixed widths:
+```
+1614729600.123    123 10.0.0.5 TCP_MISS/200 4512 GET http://example.com/ - HIER_DIRECT/93.184.216.34 text/html
+```
+
+**httpd-emulated format**, written when `emulate_httpd_log` is on, which appends the result code
+and the hierarchy code to a Common Log Format line:
+```
+10.0.0.5 - - [09/Mar/2021:12:00:00 +0000] "GET http://example.com/ HTTP/1.1" 200 4512 TCP_MISS:HIER_DIRECT
+```
+
+The padding between native fields is kept, so plain output reproduces the file. A line in neither
+format is dropped.
+
+### Varnish
+
+Reads what `varnishlog` writes. A transaction header names the transaction and its id, and the
+records under it are indented with one dash per level of nesting. Each record's payload is colored
+by the tag that introduces it, so a `ReqMethod` payload is painted as a method and a `RespStatus`
+payload as a status. A tag splash has no field for keeps its payload as message text, with any
+addresses inside it colored.
+
+**Example:**
+```bash
+varnishlog | splash --mode varnish
+varnishlog -g raw | splash --mode varnish
+```
+
+**Transaction format:**
+```
+*   << Request  >> 32770
+-   ReqMethod      GET
+-   ReqURL         /index.html
+-   ReqHeader      Host: example.com
+-   RespStatus     200
+-   End
+```
+
+**Raw format**, written by `varnishlog -g raw`, which leads each record with its transaction id and
+the side it came from, `c` for the client and `b` for the backend:
+```
+        32770 ReqMethod      c GET
+        32771 BerespStatus   b 503
+```
+
+The padding varnishlog uses to align its tags is kept, so plain output reproduces the stream. A
+line in neither format is dropped.
+
+### HAProxy
+
+Reads the three kinds of line HAProxy writes, with or without the syslog header that names the
+host and the process. A line logged straight to stdout, as it is in a container, is read the same
+way.
+
+**Example:**
+```bash
+splash --mode haproxy --path /var/log/haproxy.log
+```
+
+**`option httplog`**, which adds the status, the captured cookies, and the quoted request to the
+connection fields:
+```
+Feb  6 12:14:14 gateway haproxy[14389]: 10.0.1.2:33317 [06/Feb/2009:12:14:14.655] http-in static/srv1 10/0/30/69/109 200 2750 - - ---- 1/1/1/1/0 0/0 "GET /index.html HTTP/1.1"
+```
+
+**`option tcplog`**, which stops at the connection counters:
+```
+Feb  6 12:12:56 gateway haproxy[14387]: 10.0.1.2:33313 [06/Feb/2009:12:12:51.443] fnt bck/srv1 0/0/5007 212 -- 0/0/0/0/3 0/0
+```
+
+**Error lines**, which name the listener that refused the connection and then say what went wrong:
+```
+Feb  6 12:12:56 gateway haproxy[14387]: 127.0.0.1:34550 [06/Feb/2009:12:12:51.443] frt/f1: invalid request
+```
+
+The frontend, the backend, and the server each get their own color, as do the timers, the
+termination state, and the connection and queue counters. Captured headers before the quoted
+request are kept as message text. A line in none of the three formats is dropped.
+
+### Caddy
+
+Reads the JSON objects Caddy's structured encoder writes, one per line. The line is scanned as
+JSON rather than matched against a pattern, so a field is colored wherever it sits in the object,
+including inside the nested `request`, `headers`, and `tls` objects.
+
+**Example:**
+```bash
+splash --mode caddy --path /var/log/caddy/access.log
+```
+
+**Format:**
+```json
+{"level":"info","ts":1646861401.52,"logger":"http.log.access","msg":"handled request","request":{"remote_ip":"127.0.0.1","proto":"HTTP/2.0","method":"GET","host":"localhost","uri":"/"},"duration":0.0009,"size":10900,"status":200}
+```
+
+Every key is colored as a key, and a value takes its color from the key above it: `level`,
+`ts`, `logger`, `msg`, `error`, `remote_ip`, `client_ip`, `proto`, `method`, `host`, `uri`,
+`status`, `size`, `bytes_read`, `duration`, and `user_id`. A key splash has no field for keeps its
+value in the default style for that value's type, so nothing Caddy adds goes uncolored. Spacing
+between the pieces of the object is kept, so plain output reproduces the file. A line that is not
+a single well formed JSON object is dropped.
 
 ### Ad-hoc Mode
 
@@ -267,6 +439,12 @@ on yours before drawing conclusions from them.
 
 **Log Format Support**
 - Common Log Format (CLF) parsing
+- Apache and nginx access logs: combined, vhost combined, and extended
+- Apache and nginx error logs
+- Squid access logs, native and httpd-emulated, with cache hit and miss highlighting
+- Varnish transaction and raw logs, with each record payload colored by its tag
+- HAProxy logs from `option httplog` and `option tcplog`, plus error lines
+- Caddy structured JSON logs, scanned as JSON and colored by key
 - Ad-hoc pattern detection
 
 **Pattern Highlighting**

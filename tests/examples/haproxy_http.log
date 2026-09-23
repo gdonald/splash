@@ -1,0 +1,4 @@
+Feb  6 12:14:14 gateway haproxy[14389]: 10.0.1.2:33317 [06/Feb/2009:12:14:14.655] http-in static/srv1 10/0/30/69/109 200 2750 - - ---- 1/1/1/1/0 0/0 "GET /index.html HTTP/1.1"
+Feb  6 12:14:15 gateway haproxy[14389]: 10.0.1.9:41288 [06/Feb/2009:12:14:15.102] http-in api/srv2 0/0/1/48/49 201 512 - - ---- 3/3/1/1/0 0/0 "POST /api/orders HTTP/1.1"
+Feb  6 12:14:16 gateway haproxy[14389]: 192.168.1.50:52140 [06/Feb/2009:12:14:16.004] http-in static/srv1 2/0/0/0/9002 -1 0 - - SD-- 2/2/1/1/0 0/0 "GET /slow HTTP/1.1"
+Feb  6 12:14:17 gateway haproxy[14389]: 172.16.4.9:9911 [06/Feb/2009:12:14:17.500] http-in api/<NOSRV> 1/-1/-1/-1/1 503 213 - - SC-- 4/4/0/0/0 0/0 "GET /api/health HTTP/1.1"

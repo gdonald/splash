@@ -30,7 +30,7 @@ impl Plugin for NamedPlugin {
         &self.metadata
     }
 
-    fn parse_line(&self, _line: &str) -> ParseResult {
+    fn parse_line<'a>(&self, _line: &'a str) -> ParseResult<'a> {
         ParseResult::NoMatch
     }
 }
@@ -61,7 +61,7 @@ impl Plugin for PanickingPlugin {
         panic!("plugin name is unavailable");
     }
 
-    fn parse_line(&self, _line: &str) -> ParseResult {
+    fn parse_line<'a>(&self, _line: &'a str) -> ParseResult<'a> {
         ParseResult::NoMatch
     }
 }

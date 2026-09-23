@@ -1,0 +1,3 @@
+1614729600.123    123 10.0.0.5 TCP_MISS/200 4512 GET http://example.com/ - HIER_DIRECT/93.184.216.34 text/html
+10.0.0.42 - alice [09/Mar/2021:12:00:01 +0000] "GET http://example.com/app.css HTTP/1.1" 200 8810 TCP_MEM_HIT:NONE
+the maintenance window moves to 02:00

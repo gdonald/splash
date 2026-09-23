@@ -1,3 +1,4 @@
+use splash::output::{ParsedLine, Token, TokenKind};
 use splash::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
 
 #[test]
@@ -68,9 +69,9 @@ impl Plugin for MockPlugin {
         &self.metadata
     }
 
-    fn parse_line(&self, line: &str) -> ParseResult {
+    fn parse_line<'a>(&self, line: &'a str) -> ParseResult<'a> {
         if line.starts_with("MOCK:") {
-            ParseResult::Parsed(line.to_string())
+            ParseResult::Parsed(ParsedLine::new(vec![Token::new(line, TokenKind::Plain)]))
         } else {
             ParseResult::NoMatch
         }

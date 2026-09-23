@@ -1,15 +1,20 @@
 pub mod bench;
+pub mod caddy;
 pub mod color;
 pub mod config;
 pub mod discovery;
+pub mod haproxy;
+pub mod httpd;
 pub mod output;
 pub mod parser;
 pub mod plugin;
 pub mod registry;
 pub mod source;
+pub mod squid;
 pub mod theme;
 pub mod toml;
 pub mod tui;
+pub mod varnish;
 pub mod viewer;
 
 use crate::config::{Config, Profiles, Settings};

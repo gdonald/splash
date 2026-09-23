@@ -1,0 +1,4 @@
+2023/10/11 14:32:52 [error] 1234#0: *1 open() "/usr/share/nginx/html/missing" failed (2: No such file or directory), client: 10.0.0.9, server: localhost
+2023/10/11 14:32:58 [warn] 1234#0: *4 upstream server temporarily disabled while connecting to upstream, client: 192.168.1.50
+2023/10/11 14:33:04 [notice] 1200#0: signal process started
+2023/10/11 14:33:09 [crit] 1234#0: *9 connect() to unix:/run/app.sock failed (2: No such file or directory), client: 172.16.4.9

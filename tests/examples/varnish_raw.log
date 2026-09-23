@@ -1,0 +1,9 @@
+        32770 Begin          c req 32769 rxreq
+        32770 Timestamp      c Start: 1614729600.123456 0.000000 0.000000
+        32770 ReqStart       c 10.0.0.5 54321 a0
+        32770 ReqMethod      c GET
+        32770 ReqURL         c /index.html
+        32770 RespStatus     c 200
+        32771 BereqMethod    b GET
+        32771 BerespStatus   b 503
+        32770 End            c

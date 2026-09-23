@@ -1,0 +1,6 @@
+127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326 "-" "Mozilla/5.0"
+127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /plain.gif HTTP/1.0" 200 2326
+example.com:80 10.0.0.42 - - [10/Oct/2000:13:55:37 -0700] "GET / HTTP/1.1" 200 512 "-" "curl/8.4.0"
+[Wed Oct 11 14:32:52 2023] [core:error] [client 72.15.99.187:1234] AH00128: File does not exist
+2023/10/11 14:32:52 [error] 1234#0: *1 open() failed, client: 10.0.0.9
+the maintenance window moves to 02:00

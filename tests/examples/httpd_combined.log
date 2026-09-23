@@ -1,0 +1,4 @@
+127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326 "http://www.example.com/start.html" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+10.0.0.42 - - [10/Oct/2000:13:55:37 -0700] "POST /session HTTP/1.1" 302 0 "https://example.com/login" "curl/8.4.0"
+192.168.1.50 - alice [10/Oct/2000:13:55:38 -0700] "GET /reports/2000-10.csv HTTP/1.1" 404 153 "-" "Wget/1.21.4"
+172.16.4.9 - - [10/Oct/2000:13:56:01 -0700] "DELETE /api/queue/91 HTTP/1.1" 500 618 "-" "python-requests/2.31.0"

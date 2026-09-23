@@ -253,3 +253,98 @@ fn caching_a_pattern_counts_it() {
 fn an_invalid_pattern_is_rejected() {
     assert!(cached_pattern("(unclosed").is_err());
 }
+
+#[test]
+fn the_httpd_mode_parses_a_combined_access_log_line() {
+    let line = concat!(
+        r#"127.0.0.1 - - [10/Oct/2000:13:55:36 -0700] "GET / HTTP/1.1" 200 12 "-" "#,
+        r#""curl/8.4.0""#
+    );
+    let parsed = parse_line(line, "httpd").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::UserAgent));
+}
+
+#[test]
+fn the_httpd_mode_drops_a_line_that_is_not_a_web_server_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "httpd").is_none());
+}
+
+#[test]
+fn a_mode_no_plugin_claims_falls_back_to_the_general_patterns() {
+    let parsed = parse_line("10.0.0.9 started", "not-a-plugin").unwrap();
+
+    assert_eq!(parsed.tokens[0].kind, TokenKind::Ip);
+}
+
+#[test]
+fn the_squid_mode_parses_a_native_access_log_line() {
+    let line = concat!(
+        "1614729600.123    123 10.0.0.5 TCP_MISS/200 4512 GET http://example.com/ - ",
+        "HIER_DIRECT/93.184.216.34 text/html"
+    );
+    let parsed = parse_line(line, "squid").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::CacheMiss));
+}
+
+#[test]
+fn the_squid_mode_drops_a_line_that_is_not_an_access_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "squid").is_none());
+}
+
+#[test]
+fn the_varnish_mode_parses_a_transaction_record() {
+    let parsed = parse_line("-   ReqMethod      GET", "varnish").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Tag));
+}
+
+#[test]
+fn the_varnish_mode_drops_a_line_that_is_not_a_varnish_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "varnish").is_none());
+}
+
+#[test]
+fn the_haproxy_mode_parses_a_connection_line() {
+    let line = concat!(
+        "10.0.1.2:33313 [06/Feb/2009:12:12:51.443] fnt bck/srv1 0/0/5007 212 -- ",
+        "0/0/0/0/3 0/0"
+    );
+    let parsed = parse_line(line, "haproxy").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Termination));
+}
+
+#[test]
+fn the_haproxy_mode_drops_a_line_that_is_not_a_haproxy_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "haproxy").is_none());
+}
+
+#[test]
+fn the_caddy_mode_parses_a_structured_log_line() {
+    let line = r#"{"level":"info","status":200}"#;
+    let parsed = parse_line(line, "caddy").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Status));
+}
+
+#[test]
+fn the_caddy_mode_drops_a_line_that_is_not_json() {
+    assert!(parse_line("the maintenance window moves to 02:00", "caddy").is_none());
+}

@@ -1,0 +1,3 @@
+{"level":"error","ts":1646861402.1,"logger":"tls","msg":"job failed","error":"no such host"}
+{"level":"warn","ts":1646861404.2,"logger":"http","msg":"upstream unreachable","upstream":"10.0.0.9:8080","error":"dial tcp: connection refused","duration":2.004}
+{"level":"error","ts":1646861405.8,"logger":"http.handlers.reverse_proxy","msg":"aborting with incomplete response","error":"context canceled"}

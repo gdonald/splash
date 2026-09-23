@@ -1,0 +1,3 @@
+Feb  6 12:12:56 gateway haproxy[14387]: 127.0.0.1:34550 [06/Feb/2009:12:12:51.443] frt/f1: invalid request
+Feb  6 12:13:04 gateway haproxy[14387]: 10.0.1.9:41288 [06/Feb/2009:12:13:04.910] https-in/ssl: SSL handshake failure
+Feb  6 12:13:09 gateway haproxy[14387]: 192.168.1.50:52140 [06/Feb/2009:12:13:09.220] frt/f1: no server available for 10.0.0.9
