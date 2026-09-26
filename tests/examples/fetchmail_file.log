@@ -1,0 +1,5 @@
+fetchmail: 3 messages (1 seen) for alice at mail.example.com (12345 octets).
+reading message alice@mail.example.com:1 of 3 (4096 octets) flushed
+reading message alice@mail.example.com:2 of 3 (4096 header octets) not flushed
+skipping message alice@mail.example.com:3 (4153 octets) not flushed
+fetchmail: No mail for bob at 10.0.0.25

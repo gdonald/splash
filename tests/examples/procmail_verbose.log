@@ -1,0 +1,6 @@
+procmail: [4321] Tue Oct  3 12:00:01 2023
+procmail: Assigning "MAILDIR=/home/bob/Mail"
+procmail: Match on "^From:.*alice@example.com"
+procmail: No match on "^Subject:.*invoice"
+procmail: Locking "/var/mail/bob.lock"
+procmail: Couldn't create "/var/mail/bob"

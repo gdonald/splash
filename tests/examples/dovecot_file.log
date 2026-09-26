@@ -1,0 +1,3 @@
+Oct 03 12:00:01 imap-login: Info: Login: user=<alice>, method=PLAIN, rip=10.0.0.5, lip=10.0.0.1, mpid=4321, TLS, session=<Xy7AbC>
+Oct 03 12:00:05 imap(alice)<4321><Xy7AbC>: Info: Disconnected: Logged out in=1024 out=65536
+Oct 03 12:03:00 master: Warning: service(imap-login): process_limit (100) reached, client connections are being dropped

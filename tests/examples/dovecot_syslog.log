@@ -1,0 +1,5 @@
+Oct  3 12:00:01 mail dovecot: imap-login: Login: user=<alice>, method=PLAIN, rip=10.0.0.5, lip=10.0.0.1, mpid=4321, TLS, session=<Xy7AbC>
+Oct  3 12:00:05 mail dovecot: imap(alice)<4321><Xy7AbC>: Logged out in=1024 out=65536 deleted=0 expunged=0
+Oct  3 12:01:10 mail dovecot: pop3-login: Disconnected (auth failed, 1 attempts in 2 secs): user=<bob>, method=PLAIN, rip=192.0.2.10, lip=10.0.0.1, TLS, session=<Zq8CdE>
+Oct  3 12:01:11 mail dovecot: auth-worker(4400): Error: pam(bob,192.0.2.10): Password mismatch
+Oct  3 12:02:00 mail dovecot: lmtp(alice)<4500><Pk2LmN>: msgid=<20231003120200.abc@example.com>: saved mail to INBOX

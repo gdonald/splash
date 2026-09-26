@@ -50,6 +50,12 @@ pub enum TokenKind {
     Timers,
     Termination,
     Counters,
+    Email,
+    QueueId,
+    Path,
+    Success,
+    Warning,
+    Failure,
 }
 
 impl TokenKind {
@@ -96,11 +102,17 @@ impl TokenKind {
             TokenKind::Timers => "timers",
             TokenKind::Termination => "termination",
             TokenKind::Counters => "counters",
+            TokenKind::Email => "email",
+            TokenKind::QueueId => "queue_id",
+            TokenKind::Path => "path",
+            TokenKind::Success => "success",
+            TokenKind::Warning => "warning",
+            TokenKind::Failure => "failure",
         }
     }
 
     /// The number of distinct token styles
-    pub const COUNT: usize = 40;
+    pub const COUNT: usize = 46;
 
     /// Position of this style in `all()`, used to index a theme
     pub fn index(&self) -> usize {
@@ -160,6 +172,12 @@ impl TokenKind {
             TokenKind::Timers,
             TokenKind::Termination,
             TokenKind::Counters,
+            TokenKind::Email,
+            TokenKind::QueueId,
+            TokenKind::Path,
+            TokenKind::Success,
+            TokenKind::Warning,
+            TokenKind::Failure,
         ]
     }
 }

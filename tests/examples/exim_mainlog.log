@@ -1,0 +1,7 @@
+2023-10-03 12:00:01 1qnXYZ-000ABC-12 <= alice@example.com H=mail.example.com [10.0.0.5] P=esmtps X=TLS1.3:TLS_AES_256_GCM_SHA384:256 S=4512 id=20231003120001.abc@example.com
+2023-10-03 12:00:02 1qnXYZ-000ABC-12 => bob@example.org R=dnslookup T=remote_smtp H=mx.example.org [93.184.216.34] C="250 2.0.0 OK"
+2023-10-03 12:00:02 1qnXYZ-000ABC-12 -> carol@example.org R=dnslookup T=remote_smtp H=mx.example.org [93.184.216.34]
+2023-10-03 12:00:02 1qnXYZ-000ABC-12 Completed
+2023-10-03 12:05:10 1qnXZa-000ABD-3F == dave@example.net R=dnslookup T=remote_smtp defer (110): Connection timed out
+2023-10-03 12:05:11 1qnXZb-000ABE-4G ** erin@example.com R=dnslookup T=remote_smtp H=mx.example.com [198.51.100.4]: SMTP error from remote mail server after RCPT TO:<erin@example.com>: 550 5.1.1 User unknown
+2023-10-03 12:05:12.345 +0000 [4321] SMTP connection from [192.0.2.10]:51234 (TCP/IP connection count = 1)

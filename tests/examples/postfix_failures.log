@@ -1,0 +1,5 @@
+Oct  3 12:05:10 mail postfix/smtp[1240]: 7B3C2D0456: to=<carol@example.net>, relay=none, delay=30, delays=0.01/0/30/0, dsn=4.4.1, status=deferred (connect to mx.example.net[203.0.113.7]:25: Connection timed out)
+Oct  3 12:05:11 mail postfix/bounce[1241]: 8C4D3E0567: sender non-delivery notification: 9D5E4F0678
+Oct  3 12:05:11 mail postfix/smtp[1242]: 8C4D3E0567: to=<dave@example.com>, relay=mx.example.com[198.51.100.4]:25, delay=1.2, delays=0.1/0/0.5/0.6, dsn=5.1.1, status=bounced (host mx.example.com[198.51.100.4] said: 550 5.1.1 User unknown)
+Oct  3 12:05:12 mail postfix/smtpd[1243]: NOQUEUE: reject: RCPT from unknown[192.0.2.10]: 554 5.7.1 <erin@example.org>: Relay access denied; from=<spam@example.biz> to=<erin@example.org> proto=ESMTP helo=<example.biz>
+2023-10-03T12:05:13.451223+00:00 mail postfix/smtpd[1243]: warning: hostname example.biz does not resolve to address 192.0.2.10

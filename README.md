@@ -30,6 +30,13 @@ splash --mode haproxy --path /var/log/haproxy.log
 # Colorize Caddy's structured JSON logs
 splash --mode caddy --path /var/log/caddy/access.log
 
+# Colorize mail server logs
+splash --mode postfix --path /var/log/mail.log
+splash --mode exim --path /var/log/exim4/mainlog
+splash --mode dovecot --path /var/log/dovecot.log
+splash --mode fetchmail --path ~/.fetchmail.log
+splash --mode procmail --path ~/.procmail.log
+
 # Colorize with ad-hoc mode (auto-detects patterns)
 splash --mode ad-hoc --path /var/log/syslog
 
@@ -48,8 +55,8 @@ cat logfile.log | splash
 Usage: splash [OPTIONS]
 
 Options:
-  -m, --mode <MODE>                      Log Parsing Mode (caddy, clf, haproxy, httpd, squid,
-                                         varnish, ad-hoc)
+  -m, --mode <MODE>                      Log Parsing Mode (caddy, clf, dovecot, exim, fetchmail,
+                                         haproxy, httpd, postfix, procmail, squid, varnish, ad-hoc)
   -p, --path <PATH>                      Path to the log file
   -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain)
   -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
@@ -315,6 +322,128 @@ value in the default style for that value's type, so nothing Caddy adds goes unc
 between the pieces of the object is kept, so plain output reproduces the file. A line that is not
 a single well formed JSON object is dropped.
 
+### Mail servers
+
+The five mail modes share how they read a message. A `key=value` field has its key colored as a
+`header` and its value colored by the key: `from=` and `to=` are `email`, `relay=` and `H=` are
+`host` with the bracketed address after the name colored as `ip`, `size=` is `size`, `delay=` is
+`duration`, and `session=` and `id=` are `transaction`. A value in quotes or angle brackets keeps
+them as punctuation. An address in angle brackets, or standing alone, is colored as `email`.
+
+Whether the mail went through is colored with three styles: `success`, `warning`, and `failure`.
+Each mode applies them to the words its program uses, listed below. A field splash has no style
+for keeps its value as message text, with any IP addresses in it colored. A line the mode does not
+recognize is dropped.
+
+A syslog header, in the traditional `Oct  3 12:00:01` form or the RFC 3339 form, is colored as a
+timestamp, a host, a program, and a process id. The Postfix, Exim, Dovecot, and Fetchmail modes
+only read syslog lines logged by their own program.
+
+#### Postfix
+
+Reads the lines every Postfix daemon sends to syslog. The queue id is colored as `queue_id`, in
+the short hexadecimal form, the long form `enable_long_queue_ids` turns on, or `NOQUEUE`.
+`status=sent` is a success, `status=deferred` a warning, and `status=bounced` or `expired` a
+failure. A leading `warning:` or `hold:` is a warning, and `reject:`, `discard:`,
+`milter-reject:`, `error:`, `fatal:`, and `panic:` are failures. In the message, `removed` is a
+success, `lost connection` and `timeout` are warnings, and `Relay access denied`,
+`Recipient address rejected`, `Sender address rejected`, and `authentication failed` are failures.
+
+**Example:**
+```bash
+splash --mode postfix --path /var/log/mail.log
+```
+
+```
+Oct  3 12:00:02 mail postfix/smtp[1236]: 4F2A1C0123: to=<bob@example.org>, relay=mx.example.org[93.184.216.34]:25, delay=0.52, delays=0.1/0/0.2/0.22, dsn=2.0.0, status=sent (250 2.0.0 OK)
+Oct  3 12:05:12 mail postfix/smtpd[1243]: NOQUEUE: reject: RCPT from unknown[192.0.2.10]: 554 5.7.1 <erin@example.org>: Relay access denied; from=<spam@example.biz> to=<erin@example.org> proto=ESMTP helo=<example.biz>
+```
+
+#### Exim
+
+Reads Exim's main log, and the same lines sent to syslog. The message id is colored as
+`queue_id`, in the form Exim wrote before 4.97 and the longer one it writes since. The flag after
+it is colored by what it says: `<=`, `=>`, and `->` are successes, `*>` and `==` are warnings, and
+`**` is a failure. The router `R=` and the transport `T=` are colored as `module`. `Completed` is
+a success, `Frozen` and `retry time not reached` are warnings, and `rejected` and `SMTP error` are
+failures.
+
+**Example:**
+```bash
+splash --mode exim --path /var/log/exim4/mainlog
+```
+
+```
+2023-10-03 12:00:01 1qnXYZ-000ABC-12 <= alice@example.com H=mail.example.com [10.0.0.5] P=esmtps S=4512 id=20231003120001.abc@example.com
+2023-10-03 12:00:02 1qnXYZ-000ABC-12 => bob@example.org R=dnslookup T=remote_smtp H=mx.example.org [93.184.216.34] C="250 2.0.0 OK"
+2023-10-03 12:05:11 1qnXZb-000ABE-4G ** erin@example.com R=dnslookup T=remote_smtp H=mx.example.com [198.51.100.4]: SMTP error from remote mail server after RCPT TO:<erin@example.com>: 550 5.1.1 User unknown
+```
+
+A timestamp with milliseconds and a time zone, and the process id `log_selector = +pid` adds, are
+read too.
+
+#### Dovecot
+
+Reads Dovecot's lines from syslog and from its own log file. The service is colored as `module`,
+the user in parentheses after it as `userid` (or `pid` when it is a process id), and the ids in
+angle brackets as `pid` and then `transaction`. A level such as `Info:` or `Error:` is colored as
+`level`. `Login` and `saved mail to` are successes, and `auth failed`, `Aborted login`,
+`Password mismatch`, `unknown user`, and `Quota exceeded` are failures.
+
+**Example:**
+```bash
+splash --mode dovecot --path /var/log/dovecot.log
+```
+
+```
+Oct  3 12:00:01 mail dovecot: imap-login: Login: user=<alice>, method=PLAIN, rip=10.0.0.5, lip=10.0.0.1, mpid=4321, TLS, session=<Xy7AbC>
+Oct 03 12:00:05 imap(alice)<4321><Xy7AbC>: Info: Disconnected: Logged out in=1024 out=65536
+```
+
+#### Fetchmail
+
+Reads fetchmail's lines from syslog and from its own log file, where they carry a `fetchmail: `
+prefix, including the per-message `reading message` and `skipping message` lines that carry no
+prefix. The user and server a poll was for are colored as `userid` and `host`, a size in octets
+as `size`, counts and version numbers as `number`, and a date as `timestamp`. `flushed` and
+`SUCCESS` are successes, `not flushed`, `skipped`, `timeout`, and `LOCKBUSY` are warnings, and
+`Authorization failure`, `AUTHFAIL`, `SOCKET`, `PROTOCOL`, and `error` are failures.
+
+**Example:**
+```bash
+splash --mode fetchmail --path ~/.fetchmail.log
+```
+
+```
+fetchmail: 3 messages (1 seen) for alice at mail.example.com (12345 octets).
+reading message alice@mail.example.com:1 of 3 (4096 octets) flushed
+Oct  3 12:00:03 laptop fetchmail[2200]: Query status=3 (AUTHFAIL)
+```
+
+#### Procmail
+
+Reads procmail's `LOGFILE`. Each delivered mail is logged as a `From` line with the envelope
+sender and the date, a `Subject:` line, and a `Folder:` line with where the mail went, colored as
+`path`, and its size. Diagnostics carry a `procmail: ` prefix and, under `VERBOSE=on`, a process
+id. In a diagnostic, a quoted path is colored as `path` and a quoted assignment has its variable
+colored as `header`. `Match on` is a success, `No match on`, `Skipped`, and `Timeout` are warnings,
+and `Couldn't`, `Error`, `Unable`, `Lock failure`, and `Bad substitution` are failures.
+
+**Example:**
+```bash
+splash --mode procmail --path ~/.procmail.log
+```
+
+```
+From alice@example.com  Tue Oct  3 12:00:01 2023
+ Subject: Quarterly report
+  Folder: /home/bob/Mail/inbox						   4512
+procmail: Match on "^From:.*alice@example.com"
+procmail: Couldn't create "/var/mail/bob"
+```
+
+The spacing between fields is kept in every mail mode, so plain output reproduces the file.
+
 ### Ad-hoc Mode
 
 Automatically detects and highlights patterns in unstructured logs:
@@ -445,6 +574,11 @@ on yours before drawing conclusions from them.
 - Varnish transaction and raw logs, with each record payload colored by its tag
 - HAProxy logs from `option httplog` and `option tcplog`, plus error lines
 - Caddy structured JSON logs, scanned as JSON and colored by key
+- Postfix syslog lines, with queue ids, addresses, relays, and delivery status
+- Exim main logs, with message ids and arrival, delivery, deferral, and failure flags
+- Dovecot syslog and log file lines, with the service, user, and session
+- Fetchmail syslog and log file lines, with the user, server, sizes, and flush state
+- Procmail delivery abstracts and diagnostics
 - Ad-hoc pattern detection
 
 **Pattern Highlighting**

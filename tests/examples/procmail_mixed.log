@@ -1,0 +1,5 @@
+From alice@example.com  Tue Oct  3 12:00:01 2023
+ Subject: Quarterly report
+  Folder: /home/bob/Mail/inbox						   4512
+procmail: Match on "^From:.*alice@example.com"
+the maintenance window moves to 02:00

@@ -348,3 +348,84 @@ fn the_caddy_mode_parses_a_structured_log_line() {
 fn the_caddy_mode_drops_a_line_that_is_not_json() {
     assert!(parse_line("the maintenance window moves to 02:00", "caddy").is_none());
 }
+
+#[test]
+fn the_postfix_mode_parses_a_delivery_line() {
+    let line =
+        "Oct  3 12:00:02 mail postfix/smtp[1236]: 4F2A1C0123: to=<bob@example.org>, status=sent";
+    let parsed = parse_line(line, "postfix").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::QueueId));
+}
+
+#[test]
+fn the_postfix_mode_drops_a_line_that_is_not_a_postfix_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "postfix").is_none());
+}
+
+#[test]
+fn the_exim_mode_parses_a_delivery_line() {
+    let line = "2023-10-03 12:00:02 1qnXYZ-000ABC-12 => bob@example.org R=dnslookup";
+    let parsed = parse_line(line, "exim").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_exim_mode_drops_a_line_that_is_not_an_exim_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "exim").is_none());
+}
+
+#[test]
+fn the_fetchmail_mode_parses_a_progress_line() {
+    let line = "reading message alice@mail.example.com:1 of 3 (4096 octets) flushed";
+    let parsed = parse_line(line, "fetchmail").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Size));
+}
+
+#[test]
+fn the_fetchmail_mode_drops_a_line_that_is_not_a_fetchmail_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "fetchmail").is_none());
+}
+
+#[test]
+fn the_dovecot_mode_parses_a_login_line() {
+    let line = "Oct  3 12:00:01 mail dovecot: imap-login: Login: user=<alice>, rip=10.0.0.5";
+    let parsed = parse_line(line, "dovecot").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::UserId));
+}
+
+#[test]
+fn the_dovecot_mode_drops_a_line_that_is_not_a_dovecot_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "dovecot").is_none());
+}
+
+#[test]
+fn the_procmail_mode_parses_a_folder_line() {
+    let line = "  Folder: /home/bob/Mail/inbox\t\t   4512";
+    let parsed = parse_line(line, "procmail").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Path));
+}
+
+#[test]
+fn the_procmail_mode_drops_a_line_that_is_not_a_procmail_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "procmail").is_none());
+}

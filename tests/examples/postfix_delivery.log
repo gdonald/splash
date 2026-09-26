@@ -1,0 +1,7 @@
+Oct  3 12:00:01 mail postfix/smtpd[1234]: connect from unknown[10.0.0.5]
+Oct  3 12:00:01 mail postfix/smtpd[1234]: 4F2A1C0123: client=unknown[10.0.0.5]
+Oct  3 12:00:01 mail postfix/cleanup[1235]: 4F2A1C0123: message-id=<20231003120001.4F2A1C0123@example.com>
+Oct  3 12:00:01 mail postfix/qmgr[900]: 4F2A1C0123: from=<alice@example.com>, size=4512, nrcpt=1 (queue active)
+Oct  3 12:00:02 mail postfix/smtp[1236]: 4F2A1C0123: to=<bob@example.org>, relay=mx.example.org[93.184.216.34]:25, delay=0.52, delays=0.1/0/0.2/0.22, dsn=2.0.0, status=sent (250 2.0.0 OK)
+Oct  3 12:00:02 mail postfix/qmgr[900]: 4F2A1C0123: removed
+Oct  3 12:00:03 mail postfix/smtpd[1234]: disconnect from unknown[10.0.0.5] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5

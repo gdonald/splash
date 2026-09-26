@@ -1,0 +1,3 @@
+2023-10-03 12:00:01 1qnXYZ-000ABC-12 <= alice@example.com H=mail.example.com [10.0.0.5] P=esmtps S=4512
+Oct  3 12:00:01 mail exim[4321]: 1qnXYZ-000ABC-12 => bob@example.org R=dnslookup T=remote_smtp H=mx.example.org [93.184.216.34]
+the maintenance window moves to 02:00

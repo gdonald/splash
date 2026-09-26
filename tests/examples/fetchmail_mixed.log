@@ -1,0 +1,4 @@
+fetchmail: 3 messages for alice at mail.example.com (12345 octets).
+reading message alice@mail.example.com:1 of 3 (4096 octets) flushed
+Oct  3 12:00:01 laptop fetchmail[2200]: Query status=3 (AUTHFAIL)
+the maintenance window moves to 02:00

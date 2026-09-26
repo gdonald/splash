@@ -3,9 +3,14 @@
 /// This module provides the registry system for loading, storing, and
 /// querying available log format plugins.
 use crate::caddy::CaddyPlugin;
+use crate::dovecot::DovecotPlugin;
+use crate::exim::EximPlugin;
+use crate::fetchmail::FetchmailPlugin;
 use crate::haproxy::HaproxyPlugin;
 use crate::httpd::HttpdPlugin;
 use crate::plugin::{Plugin, PluginVersion};
+use crate::postfix::PostfixPlugin;
+use crate::procmail::ProcmailPlugin;
 use crate::squid::SquidPlugin;
 use crate::varnish::VarnishPlugin;
 use std::collections::HashMap;
@@ -60,11 +65,31 @@ impl PluginRegistry {
             .expect("built-in plugin names are distinct");
 
         registry
+            .register(Arc::new(DovecotPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(EximPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(FetchmailPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(HaproxyPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry
             .register(Arc::new(HttpdPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(PostfixPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(ProcmailPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry

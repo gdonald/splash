@@ -1736,3 +1736,656 @@ fn test_list_plugins_names_the_caddy_plugin() {
         "--list-plugins should name the built-in caddy plugin"
     );
 }
+
+// ==================== Postfix Tests ====================
+
+#[test]
+fn test_postfix_mode_colors_the_queue_id_and_the_recipient_of_a_delivery() {
+    let example = example_path("postfix_delivery.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "postfix",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"queue_id","text":"4F2A1C0123"}"#),
+        "the queue id should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"email","text":"bob@example.org"}"#),
+        "the recipient should be colored as an email"
+    );
+}
+
+#[test]
+fn test_postfix_mode_colors_whether_each_mail_was_sent_deferred_or_bounced() {
+    let example = example_path("postfix_failures.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "postfix",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"warning","text":"deferred"}"#),
+        "a deferred mail should be colored as a warning"
+    );
+    assert!(
+        output.contains(r#"{"kind":"failure","text":"bounced"}"#),
+        "a bounced mail should be colored as a failure"
+    );
+}
+
+#[test]
+fn test_postfix_mode_colors_the_relay_and_its_address() {
+    let example = example_path("postfix_delivery.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "postfix",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"host","text":"mx.example.org"}"#),
+        "the relay should be colored as a host"
+    );
+    assert!(
+        output.contains(r#"{"kind":"ip","text":"93.184.216.34"}"#),
+        "the relay address should be colored as an address"
+    );
+}
+
+#[test]
+fn test_postfix_mode_reads_every_line_of_a_delivery_log() {
+    let example = example_path("postfix_delivery.log");
+    let output = run_splash_with_file("postfix", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 7);
+}
+
+#[test]
+fn test_postfix_mode_reads_every_line_of_a_failures_log() {
+    let example = example_path("postfix_failures.log");
+    let output = run_splash_with_file("postfix", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 5);
+}
+
+#[test]
+fn test_postfix_mode_drops_a_line_that_is_not_a_postfix_log() {
+    let example = example_path("postfix_mixed.log");
+    let output = run_splash_with_file("postfix", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 2);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_postfix_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("postfix_mixed.log");
+    let contents = example_contents("postfix_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "postfix",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_postfix_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("postfix v1.0.0"),
+        "--list-plugins should name the built-in postfix plugin"
+    );
+}
+
+// ==================== Exim Tests ====================
+
+#[test]
+fn test_exim_mode_colors_the_message_id_and_the_arrival_flag() {
+    let example = example_path("exim_mainlog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "exim",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"queue_id","text":"1qnXYZ-000ABC-12"}"#),
+        "the message id should be colored as its own field"
+    );
+    assert!(
+        output.contains(r#"{"kind":"success","text":"<="}"#),
+        "an arrival should be colored as a success"
+    );
+}
+
+#[test]
+fn test_exim_mode_colors_deferred_and_failed_deliveries() {
+    let example = example_path("exim_mainlog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "exim",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"warning","text":"=="}"#),
+        "a deferral should be colored as a warning"
+    );
+    assert!(
+        output.contains(r#"{"kind":"failure","text":"**"}"#),
+        "a failed delivery should be colored as a failure"
+    );
+}
+
+#[test]
+fn test_exim_mode_colors_the_router_and_the_transport() {
+    let example = example_path("exim_mainlog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "exim",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"module","text":"dnslookup"}"#),
+        "the router should be colored as a module"
+    );
+    assert!(
+        output.contains(r#"{"kind":"module","text":"remote_smtp"}"#),
+        "the transport should be colored as a module"
+    );
+}
+
+#[test]
+fn test_exim_mode_reads_every_line_of_a_mainlog_log() {
+    let example = example_path("exim_mainlog.log");
+    let output = run_splash_with_file("exim", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 7);
+}
+
+#[test]
+fn test_exim_mode_drops_a_line_that_is_not_a_exim_log() {
+    let example = example_path("exim_mixed.log");
+    let output = run_splash_with_file("exim", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 2);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_exim_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("exim_mixed.log");
+    let contents = example_contents("exim_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "exim",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_exim_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("exim v1.0.0"),
+        "--list-plugins should name the built-in exim plugin"
+    );
+}
+
+// ==================== Fetchmail Tests ====================
+
+#[test]
+fn test_fetchmail_mode_colors_the_user_and_server_a_poll_was_for() {
+    let example = example_path("fetchmail_syslog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "fetchmail",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"userid","text":"alice"}"#),
+        "the user should be colored as a user"
+    );
+    assert!(
+        output.contains(r#"{"kind":"host","text":"mail.example.com"}"#),
+        "the server should be colored as a host"
+    );
+}
+
+#[test]
+fn test_fetchmail_mode_colors_whether_each_message_was_flushed() {
+    let example = example_path("fetchmail_file.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "fetchmail",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"success","text":"flushed"}"#),
+        "a flushed message should be colored as a success"
+    );
+    assert!(
+        output.contains(r#"{"kind":"warning","text":"not flushed"}"#),
+        "a message left on the server should be colored as a warning"
+    );
+}
+
+#[test]
+fn test_fetchmail_mode_colors_an_authentication_failure() {
+    let example = example_path("fetchmail_syslog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "fetchmail",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"failure","text":"AUTHFAIL"}"#),
+        "an authentication failure should be colored as a failure"
+    );
+}
+
+#[test]
+fn test_fetchmail_mode_reads_every_line_of_a_syslog_log() {
+    let example = example_path("fetchmail_syslog.log");
+    let output = run_splash_with_file("fetchmail", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 5);
+}
+
+#[test]
+fn test_fetchmail_mode_reads_every_line_of_a_file_log() {
+    let example = example_path("fetchmail_file.log");
+    let output = run_splash_with_file("fetchmail", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 5);
+}
+
+#[test]
+fn test_fetchmail_mode_drops_a_line_that_is_not_a_fetchmail_log() {
+    let example = example_path("fetchmail_mixed.log");
+    let output = run_splash_with_file("fetchmail", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_fetchmail_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("fetchmail_mixed.log");
+    let contents = example_contents("fetchmail_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "fetchmail",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_fetchmail_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("fetchmail v1.0.0"),
+        "--list-plugins should name the built-in fetchmail plugin"
+    );
+}
+
+// ==================== Dovecot Tests ====================
+
+#[test]
+fn test_dovecot_mode_colors_the_service_user_and_session_of_a_login() {
+    let example = example_path("dovecot_syslog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "dovecot",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"module","text":"imap-login"}"#),
+        "the service should be colored as a module"
+    );
+    assert!(
+        output.contains(r#"{"kind":"userid","text":"alice"}"#),
+        "the user should be colored as a user"
+    );
+    assert!(
+        output.contains(r#"{"kind":"transaction","text":"Xy7AbC"}"#),
+        "the session id should be colored as its own field"
+    );
+}
+
+#[test]
+fn test_dovecot_mode_colors_a_failed_login() {
+    let example = example_path("dovecot_syslog.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "dovecot",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"failure","text":"auth failed"}"#),
+        "a failed login should be colored as a failure"
+    );
+}
+
+#[test]
+fn test_dovecot_mode_colors_the_level_of_a_log_file_line() {
+    let example = example_path("dovecot_file.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "dovecot",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"level","text":"Info"}"#),
+        "the level should be colored as a level"
+    );
+    assert!(
+        output.contains(r#"{"kind":"level","text":"Warning"}"#),
+        "the level should be colored as a level"
+    );
+}
+
+#[test]
+fn test_dovecot_mode_reads_every_line_of_a_syslog_log() {
+    let example = example_path("dovecot_syslog.log");
+    let output = run_splash_with_file("dovecot", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 5);
+}
+
+#[test]
+fn test_dovecot_mode_reads_every_line_of_a_file_log() {
+    let example = example_path("dovecot_file.log");
+    let output = run_splash_with_file("dovecot", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_dovecot_mode_drops_a_line_that_is_not_a_dovecot_log() {
+    let example = example_path("dovecot_mixed.log");
+    let output = run_splash_with_file("dovecot", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 2);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_dovecot_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("dovecot_mixed.log");
+    let contents = example_contents("dovecot_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "dovecot",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_dovecot_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("dovecot v1.0.0"),
+        "--list-plugins should name the built-in dovecot plugin"
+    );
+}
+
+// ==================== Procmail Tests ====================
+
+#[test]
+fn test_procmail_mode_colors_the_sender_folder_and_size_of_a_delivered_mail() {
+    let example = example_path("procmail_abstract.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "procmail",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"email","text":"alice@example.com"}"#),
+        "the sender should be colored as an email"
+    );
+    assert!(
+        output.contains(r#"{"kind":"path","text":"/home/bob/Mail/inbox"}"#),
+        "the folder should be colored as a path"
+    );
+    assert!(
+        output.contains(r#"{"kind":"size","text":"4512"}"#),
+        "the size should be colored as a size"
+    );
+}
+
+#[test]
+fn test_procmail_mode_colors_matched_and_unmatched_recipes() {
+    let example = example_path("procmail_verbose.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "procmail",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"success","text":"Match on"}"#),
+        "a matched recipe should be colored as a success"
+    );
+    assert!(
+        output.contains(r#"{"kind":"warning","text":"No match on"}"#),
+        "an unmatched recipe should be colored as a warning"
+    );
+}
+
+#[test]
+fn test_procmail_mode_colors_a_failure_to_deliver() {
+    let example = example_path("procmail_verbose.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "procmail",
+        "--output",
+        "json",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"failure","text":"Couldn't"}"#),
+        "a failure should be colored as a failure"
+    );
+}
+
+#[test]
+fn test_procmail_mode_reads_every_line_of_a_abstract_log() {
+    let example = example_path("procmail_abstract.log");
+    let output = run_splash_with_file("procmail", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 6);
+}
+
+#[test]
+fn test_procmail_mode_reads_every_line_of_a_verbose_log() {
+    let example = example_path("procmail_verbose.log");
+    let output = run_splash_with_file("procmail", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 6);
+}
+
+#[test]
+fn test_procmail_mode_drops_a_line_that_is_not_a_procmail_log() {
+    let example = example_path("procmail_mixed.log");
+    let output = run_splash_with_file("procmail", example.to_str().unwrap()).unwrap();
+
+    assert_eq!(output.lines().count(), 4);
+    assert!(
+        !output.contains("maintenance window"),
+        "a line in none of the formats should be dropped"
+    );
+}
+
+#[test]
+fn test_procmail_mode_reproduces_each_line_in_plain_output() {
+    let example = example_path("procmail_mixed.log");
+    let contents = example_contents("procmail_mixed.log");
+    let output = run_splash_file_args(&[
+        "--mode",
+        "procmail",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for line in output.lines() {
+        assert!(
+            contents.contains(line),
+            "plain output changed the line '{}'",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_list_plugins_names_the_procmail_plugin() {
+    let output = run_splash(&["--list-plugins"]).unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        listing.contains("procmail v1.0.0"),
+        "--list-plugins should name the built-in procmail plugin"
+    );
+}
