@@ -1,0 +1,4 @@
+root (10/03-12:00:01-5101) CMD (run-parts /etc/cron.hourly)
+alice (10/03-12:05:00-701) BEGIN EDIT (alice)
+alice (10/03-12:05:30-701) END EDIT (alice)
+root (10/03-12:07:00-700) ERROR (getpwnam() failed): No such file or directory

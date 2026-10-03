@@ -1,0 +1,4 @@
+Oct  3 12:00:01 web01 CRON[5101]: (root) CMD (cd / && run-parts --report /etc/cron.hourly)
+the maintenance window moves to 02:00
+Oct  3 12:00:01 web01 sshd[4101]: Accepted password for alice from 10.0.0.5 port 52144 ssh2
+root (10/03-12:00:01-5101) CMD (run-parts /etc/cron.hourly)

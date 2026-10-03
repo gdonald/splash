@@ -1,0 +1,6 @@
+[    0.000000] Linux version 6.1.0-13-amd64 (debian-kernel@lists.debian.org)
+[    1.234567] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[    2.345678] EXT4-fs (sda1): mounted filesystem with ordered data mode
+[    3.456789] e1000e 0000:00:19.0 eth0: NIC Link is Up 1000 Mbps Full Duplex
+[ 1234.567890] blk_update_request: I/O error, dev sdb, sector 2048
+[ 2345.678901] nginx[2201]: segfault at 0 ip 000055d4 sp 00007ffd error 4

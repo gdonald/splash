@@ -1,0 +1,8 @@
+1234:C 03 Oct 2023 12:00:00.001 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+1234:M 03 Oct 2023 12:00:00.123 * Ready to accept connections tcp
+1234:M 03 Oct 2023 12:05:00.456 * 100 changes in 300 seconds. Saving...
+5678:C 03 Oct 2023 12:05:00.789 * DB saved on disk
+1234:M 03 Oct 2023 12:05:00.900 * Background saving terminated with success
+1234:M 03 Oct 2023 12:06:00.000 # WARNING: The TCP backlog setting of 511 cannot be enforced
+2345:S 03 Oct 2023 12:07:00.000 - Accepted 10.0.0.5:52144
+2345:X 03 Oct 2023 12:08:00.000 . +sdown master mymaster 10.0.0.1 6379

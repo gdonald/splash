@@ -1,0 +1,7 @@
+Oct  3 12:00:01 web01 sshd[4101]: Accepted password for alice from 10.0.0.5 port 52144 ssh2
+Oct  3 12:00:01 web01 sshd[4101]: pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)
+Oct  3 12:00:02 web01 sshd[4102]: Failed password for invalid user admin from 203.0.113.7 port 40022 ssh2
+Oct  3 12:00:02 web01 sshd[4102]: Invalid user admin from 203.0.113.7 port 40022
+Oct  3 12:00:03 web01 sshd[4103]: Connection closed by authenticating user root 203.0.113.7 port 40100 [preauth]
+Oct  3 12:00:04 web01 systemd-logind[700]: New session 12 of user alice.
+Oct  3 12:00:09 web01 sshd[4101]: pam_unix(sshd:session): session closed for user alice

@@ -1,0 +1,3 @@
+[03/Oct/2023:12:00:00] [1:main] Icecast Version 1.3.12 Starting..
+[03/Oct/2023:12:00:01] Admin [3:Connection Handler] Accepted admin from 10.0.0.30
+[03/Oct/2023:12:05:00] [2:Bandwidth Calculator] [03/Oct/2023:12:05:00] Bandwidth:128.50KB/s Sources:1 Clients:42 Admins:1

@@ -1,0 +1,7 @@
+Oct  3 12:00:00 git01 git-daemon[3000]: Ready to rumble
+Oct  3 12:00:01 git01 git-daemon[3101]: Connection from 10.0.0.5:52144
+Oct  3 12:00:01 git01 git-daemon[3101]: Extended attribute "host": git.example.com
+Oct  3 12:00:01 git01 git-daemon[3101]: Request upload-pack for '/srv/git/app.git'
+Oct  3 12:00:02 git01 git-daemon[3102]: '/srv/git/secret.git': repository not exported.
+[3101] Connection from 10.0.0.6:52150
+[3000] [3101] Disconnected

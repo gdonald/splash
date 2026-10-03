@@ -1,0 +1,5 @@
+[    1.234567] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[ 2000.000001] WARNING: CPU: 1 PID: 0 at kernel/sched/core.c:123 update_rq_clock+0x12/0x30
+the maintenance window moves to 02:00
+Oct  3 12:00:03 web01 kernel: [ 3456.789012] BUG: soft lockup - CPU#2 stuck for 22s! [kworker/2:1:1234]
+Oct  3 12:00:04 web01 kernel: [ 3457.000001] INFO: task kworker/0:1:123 blocked for more than 120 seconds.

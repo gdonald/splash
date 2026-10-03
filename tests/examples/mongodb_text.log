@@ -1,0 +1,3 @@
+2019-10-03T12:00:01.123+0000 I  NETWORK  [listener] connection accepted from 10.0.0.5:52144 #12 (3 connections now open)
+2019-10-03T12:00:02.234+0000 W  COMMAND  [conn12] Slow query error
+2019-10-03T12:00:03.345+0000 E  STORAGE  [initandlisten] Failed to open journal

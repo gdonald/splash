@@ -8,6 +8,7 @@
 use crate::mail::{self, Words};
 use crate::output::{ParsedLine, Token, TokenKind};
 use crate::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
+use crate::syslog;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -78,7 +79,7 @@ impl Plugin for PostfixPlugin {
 /// Parses one Postfix log line, or returns `None` when the line was not
 /// logged by a Postfix daemon.
 pub fn parse_line(line: &str) -> Option<ParsedLine<'_>> {
-    let header = mail::split_syslog_header(line)?;
+    let header = syslog::split_header(line)?;
 
     if !header.program.starts_with("postfix") {
         return None;

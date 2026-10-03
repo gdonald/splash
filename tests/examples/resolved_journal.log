@@ -1,0 +1,8 @@
+Oct 03 12:00:00 web01 systemd-resolved[600]: Positive Trust Anchors:
+Oct 03 12:00:00 web01 systemd-resolved[600]: . IN DS 20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d
+Oct 03 12:00:00 web01 systemd-resolved[600]: Negative trust anchors: home.arpa 10.in-addr.arpa local test
+Oct 03 12:00:00 web01 systemd-resolved[600]: Using system hostname 'web01'.
+Oct 03 12:00:01 web01 systemd-resolved[600]: Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.0.0.53.
+Oct 03 12:00:02 web01 systemd-resolved[600]: Switching to fallback DNS server 2001:db8::53.
+Oct 03 12:05:01 web01 systemd-resolved[600]: Grace period over, resuming full feature set (UDP+EDNS0) for DNS server 10.0.0.53.
+Oct 03 12:06:00 web01 systemd-resolved[600]: Server returned error NXDOMAIN, mitigating potential DNS violation DVE-2018-0001, retrying transaction with reduced feature level UDP.

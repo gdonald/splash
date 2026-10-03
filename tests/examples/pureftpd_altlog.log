@@ -1,0 +1,7 @@
+#Software: Pure-FTPd 1.0.51
+#Version: 1.0
+#Date: 2023-10-03 12:00:00
+#Fields: date time c-ip cs-method cs-uri-stem sc-status cs-username sc-bytes
+2023-10-03 12:00:03 10.0.0.5 []sent /home/alice/report.pdf 226 alice 4096
+2023-10-03 12:00:04 10.0.0.5 []created /home/alice/backup.tar 226 alice 1048576
+10.0.0.5 - alice [03/Oct/2023:12:00:03 +0000] "GET /home/alice/report.pdf" 200 4096

@@ -1,0 +1,5 @@
+2023-10-03T12:00:01.123Z [INFO]  Terraform version: 1.6.0
+2023-10-03T12:00:02.234Z [DEBUG] provider.terraform-provider-aws_v5.0.0: HTTP Request Sent: tf_req_id=7c1f2b3a-4d5e-6f70-8192-a3b4c5d6e7f8 tf_rpc=ApplyResourceChange @module=aws timestamp=2023-10-03T12:00:02.234Z
+2023-10-03T12:00:03.345Z [WARN]  Provider "registry.terraform.io/hashicorp/aws" produced an unexpected new value
+2023-10-03T12:00:04.456Z [ERROR] vertex "aws_instance.web" error: timeout while waiting for state
+{"@level":"info","@message":"aws_instance.web: Creation complete after 32s [id=i-0abc123def4567890]","@module":"terraform.ui","@timestamp":"2023-10-03T12:00:05.567890Z","hook":{"resource":{"addr":"aws_instance.web"},"action":"create","id_key":"id","id_value":"i-0abc123def4567890","elapsed_seconds":32},"type":"apply_complete"}

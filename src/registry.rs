@@ -2,17 +2,51 @@
 ///
 /// This module provides the registry system for loading, storing, and
 /// querying available log format plugins.
+use crate::apache_error::ApacheErrorPlugin;
+use crate::apm::ApmPlugin;
+use crate::auth::AuthPlugin;
 use crate::caddy::CaddyPlugin;
+use crate::ci::CiPlugin;
+use crate::cloud_init::CloudInitPlugin;
+use crate::cron::CronPlugin;
+use crate::distcc::DistccPlugin;
+use crate::dmesg::DmesgPlugin;
+use crate::docker::DockerPlugin;
 use crate::dovecot::DovecotPlugin;
+use crate::elasticsearch::ElasticsearchPlugin;
 use crate::exim::EximPlugin;
 use crate::fetchmail::FetchmailPlugin;
+use crate::ftpstats::FtpstatsPlugin;
+use crate::git::GitPlugin;
 use crate::haproxy::HaproxyPlugin;
 use crate::httpd::HttpdPlugin;
+use crate::icecast::IcecastPlugin;
+use crate::journalctl::JournalctlPlugin;
+use crate::kubernetes::KubernetesPlugin;
+use crate::mongodb::MongodbPlugin;
+use crate::mysql::MysqlPlugin;
+use crate::nginx_error::NginxErrorPlugin;
+use crate::oops::OopsPlugin;
+use crate::php::PhpPlugin;
 use crate::plugin::{Plugin, PluginVersion};
 use crate::postfix::PostfixPlugin;
+use crate::postgresql::PostgresqlPlugin;
 use crate::procmail::ProcmailPlugin;
+use crate::proftpd::ProftpdPlugin;
+use crate::pureftpd::PureftpdPlugin;
+use crate::redis::RedisPlugin;
+use crate::resolved::ResolvedPlugin;
 use crate::squid::SquidPlugin;
+use crate::ssh::SshPlugin;
+use crate::sudo::SudoPlugin;
+use crate::sulog::SulogPlugin;
+use crate::super_log::SuperPlugin;
+use crate::syslog::SyslogPlugin;
+use crate::terraform::TerraformPlugin;
+use crate::ulogd::UlogdPlugin;
 use crate::varnish::VarnishPlugin;
+use crate::vsftpd::VsftpdPlugin;
+use crate::xferlog::XferlogPlugin;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -61,11 +95,51 @@ impl PluginRegistry {
         let registry = PluginRegistry::new();
 
         registry
+            .register(Arc::new(ApacheErrorPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(ApmPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(AuthPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(CaddyPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry
+            .register(Arc::new(CiPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(CloudInitPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(CronPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(DistccPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(DmesgPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(DockerPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(DovecotPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(ElasticsearchPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry
@@ -77,6 +151,14 @@ impl PluginRegistry {
             .expect("built-in plugin names are distinct");
 
         registry
+            .register(Arc::new(FtpstatsPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(GitPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(HaproxyPlugin::new()))
             .expect("built-in plugin names are distinct");
 
@@ -85,7 +167,43 @@ impl PluginRegistry {
             .expect("built-in plugin names are distinct");
 
         registry
+            .register(Arc::new(IcecastPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(JournalctlPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(KubernetesPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(MongodbPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(MysqlPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(NginxErrorPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(OopsPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(PhpPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(PostfixPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(PostgresqlPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry
@@ -93,11 +211,63 @@ impl PluginRegistry {
             .expect("built-in plugin names are distinct");
 
         registry
+            .register(Arc::new(ProftpdPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(PureftpdPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(RedisPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(ResolvedPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(SquidPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry
+            .register(Arc::new(SshPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(SudoPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(SulogPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(SuperPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(SyslogPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(TerraformPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(UlogdPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
             .register(Arc::new(VarnishPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(VsftpdPlugin::new()))
+            .expect("built-in plugin names are distinct");
+
+        registry
+            .register(Arc::new(XferlogPlugin::new()))
             .expect("built-in plugin names are distinct");
 
         registry

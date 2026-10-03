@@ -1,0 +1,6 @@
+2023-10-03 12:00:01.123 UTC [1234] LOG:  checkpoint starting: time
+2023-10-03 12:00:02.234 UTC [1301] app@appdb ERROR:  duplicate key value violates unique constraint "orders_pkey"
+2023-10-03 12:00:02.234 UTC [1301] app@appdb DETAIL:  Key (id)=(42) already exists.
+2023-10-03 12:00:03.345 UTC [1302] [unknown]@[unknown] LOG:  connection received: host=10.0.0.5 port=52144
+2023-10-03 12:00:04.456 UTC [1303] app@appdb LOG:  duration: 12.345 ms  execute <unnamed>: SELECT 1
+2023-10-03 12:00:05.567 UTC [1304] postgres@postgres FATAL:  database "missing" does not exist

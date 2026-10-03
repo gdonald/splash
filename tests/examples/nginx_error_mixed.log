@@ -1,0 +1,3 @@
+2023/10/03 12:00:04 [notice] 1200#1200: signal process started
+the maintenance window moves to 02:00
+127.0.0.1 - - [03/Oct/2023:12:00:01 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0"

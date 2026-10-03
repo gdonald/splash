@@ -1,0 +1,7 @@
+Tue Oct  3 12:00:01 2023 [pid 4321] CONNECT: Client "10.0.0.5"
+Tue Oct  3 12:00:02 2023 [pid 4320] [alice] OK LOGIN: Client "10.0.0.5"
+Tue Oct  3 12:00:03 2023 [pid 4322] [alice] OK DOWNLOAD: Client "10.0.0.5", "/home/alice/report.pdf", 4096 bytes, 512.00Kbyte/sec
+Tue Oct  3 12:00:04 2023 [pid 4322] [alice] FAIL UPLOAD: Client "10.0.0.5", "/home/alice/locked.txt", 0.00Kbyte/sec
+Tue Oct  3 12:00:05 2023 [pid 4323] [ftp] OK LOGIN: Client "10.0.0.7", anon password "guest@example.org"
+Tue Oct  3 12:00:06 2023 [pid 4322] [alice] FTP command: Client "10.0.0.5", "RETR report.pdf"
+Tue Oct  3 12:00:06 2023 [pid 4322] [alice] FTP response: Client "10.0.0.5", "226 Transfer complete."

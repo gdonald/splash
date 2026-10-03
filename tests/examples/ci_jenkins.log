@@ -1,0 +1,10 @@
+Started by user Alice Example
+Running as SYSTEM
+Building in workspace /var/lib/jenkins/workspace/app
+[Pipeline] stage
+[Pipeline] { (Test)
+[Pipeline] sh
++ make test
+tests/order_test.go:42: expected 3, got 2
+FAILED tests/order_test.go
+Finished: FAILURE

@@ -1,0 +1,5 @@
+2023-10-03T12:00:01.123456789Z stdout F listening on :8080
+2023-10-03T12:00:02.234567890Z stderr P panic: runtime error: index out of range
+2023-10-03T12:00:02.234567891Z stderr F goroutine 1 [running]:
+2023-10-03T12:00:03.345678901Z stderr F I1003 12:00:03.345678       1 leaderelection.go:250] attempting to acquire leader lease kube-system/kube-scheduler...
+2023-10-03T12:00:04.456789012Z stdout F

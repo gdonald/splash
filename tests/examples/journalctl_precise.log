@@ -1,0 +1,7 @@
+2023-10-03T12:00:01+0000 web01 sshd[4100]: Server listening on 0.0.0.0 port 22.
+2023-10-03T12:00:02.123456+00:00 web01 systemd[1]: Stopping cron.service - Regular background program processing daemon...
+Oct 03 12:00:03.654321 web01 systemd[1]: Stopped cron.service - Regular background program processing daemon.
+Tue 2023-10-03 12:00:04 UTC web01 systemd[1]: Listening on dbus.socket - D-Bus System Message Bus Socket.
+[    5.123456] web01 systemd[1]: Finished systemd-sysctl.service - Apply Kernel Variables.
+1696334406.000123 web01 systemd[1]: Started session-12.scope - Session 12 of User alice.
+-- No entries --

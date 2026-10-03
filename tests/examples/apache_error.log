@@ -1,0 +1,6 @@
+[Wed Oct 11 14:32:52.123456 2023] [core:error] [pid 35708:tid 4328636416] [client 72.15.99.187:1234] AH00128: File does not exist: /var/www/favicon.ico
+[Wed Oct 11 14:32:53.900011 2023] [proxy_fcgi:error] [pid 35708:tid 4328636416] [client 10.0.0.42:52140] AH01071: Got error 'PHP message: PHP Fatal error:  Uncaught Error: Call to undefined function foo() in /var/www/html/index.php:12'
+[Wed Oct 11 14:33:01 2023] [warn] [client 192.168.1.50] mod_deflate: skipping already compressed response
+[Wed Oct 11 14:33:05.000100 2023] [php7:error] [pid 35710] [client 2001:db8::1:52144] PHP Warning:  Undefined variable $total in /var/www/html/cart.php on line 42
+[Wed Oct 11 14:33:14.004400 2023] [mpm_event:notice] [pid 35700:tid 4328636416] AH00489: Apache configured -- resuming normal operations
+[Wed Oct 11 14:33:20 2023] [notice]

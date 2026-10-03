@@ -1,0 +1,4 @@
+2023-10-03 12:00:01,123 ftp proftpd[4321] ftp.example.com (client.example.org[10.0.0.5]): USER alice: Login successful.
+the maintenance window moves to 02:00
+Oct  3 12:00:02 ftp proftpd[4322]: ftp.example.com (10.0.0.9[10.0.0.9]) - USER bob (Login failed): Incorrect password
+10.0.0.5 - alice [03/Oct/2023:12:00:03 +0000] "RETR report.pdf" 226 4096

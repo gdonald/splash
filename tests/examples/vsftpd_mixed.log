@@ -1,0 +1,5 @@
+Tue Oct  3 12:00:01 2023 [pid 4321] CONNECT: Client "10.0.0.5"
+the maintenance window moves to 02:00
+Oct  3 12:00:02 ftp vsftpd[4320]: [alice] OK LOGIN: Client "10.0.0.5"
+Oct  3 12:00:03 mail postfix/qmgr[900]: 4F2A1C0123: removed
+Tue Oct  3 12:00:03 2023 [pid 4322] [alice] OK DELETE: Client "10.0.0.5", "/home/alice/old.txt"

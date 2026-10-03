@@ -32,78 +32,6 @@ fn joined(text: &str) -> String {
 }
 
 #[test]
-fn a_traditional_syslog_header_is_split_off_the_message() {
-    let header =
-        mail::split_syslog_header("Oct  3 12:00:01 mail postfix/smtpd[1234]: connect").unwrap();
-
-    assert_eq!(header.body, "connect");
-}
-
-#[test]
-fn a_syslog_header_names_the_program_that_logged_the_line() {
-    let header =
-        mail::split_syslog_header("Oct  3 12:00:01 mail postfix/smtpd[1234]: connect").unwrap();
-
-    assert_eq!(header.program, "postfix/smtpd");
-}
-
-#[test]
-fn a_syslog_header_colors_the_timestamp_host_program_and_process_id() {
-    let header =
-        mail::split_syslog_header("Oct  3 12:00:01 mail postfix/smtpd[1234]: connect").unwrap();
-    let colored: Vec<(&str, TokenKind)> = header
-        .tokens
-        .iter()
-        .filter(|token| token.kind != TokenKind::Plain && token.kind != TokenKind::Punctuation)
-        .map(|token| (token.text, token.kind))
-        .collect();
-
-    assert_eq!(
-        colored,
-        vec![
-            ("Oct  3 12:00:01", TokenKind::Timestamp),
-            ("mail", TokenKind::Host),
-            ("postfix/smtpd", TokenKind::Tag),
-            ("1234", TokenKind::Pid),
-        ]
-    );
-}
-
-#[test]
-fn a_syslog_header_without_a_process_id_is_split_off_the_message() {
-    let header =
-        mail::split_syslog_header("Oct  3 12:00:01 mail dovecot: imap-login: Login").unwrap();
-
-    assert_eq!(header.body, "imap-login: Login");
-}
-
-#[test]
-fn a_syslog_header_without_a_process_id_has_no_process_id_token() {
-    let header =
-        mail::split_syslog_header("Oct  3 12:00:01 mail dovecot: imap-login: Login").unwrap();
-
-    assert!(!header
-        .tokens
-        .iter()
-        .any(|token| token.kind == TokenKind::Pid));
-}
-
-#[test]
-fn a_syslog_header_with_an_rfc_3339_timestamp_is_split_off_the_message() {
-    let header = mail::split_syslog_header(
-        "2023-10-03T12:00:01.123456+00:00 mail postfix/qmgr[900]: removed",
-    )
-    .unwrap();
-
-    assert_eq!(header.tokens[0].text, "2023-10-03T12:00:01.123456+00:00");
-}
-
-#[test]
-fn a_line_without_a_syslog_header_is_not_split() {
-    assert!(mail::split_syslog_header("the maintenance window moves to 02:00").is_none());
-}
-
-#[test]
 fn a_field_colors_its_key_as_a_header() {
     assert_eq!(field("size=4512", TokenKind::Header), "size");
 }
@@ -385,8 +313,7 @@ fn an_unknown_status_is_message_text() {
 }
 
 #[test]
-fn a_ctime_date_pattern_matches_a_date_with_a_padded_day() {
-    let pattern = regex::Regex::new(&format!("^{}$", mail::CTIME)).unwrap();
-
-    assert!(pattern.is_match("Tue Oct  3 12:00:01 2023"));
+fn a_word_list_reports_whether_text_holds_one_of_its_words() {
+    assert!(WORDS.is_match("all flushed"));
+    assert!(!WORDS.is_match("all done"));
 }

@@ -1,0 +1,9 @@
+Oct  3 12:00:00 laptop apmd[800]: Battery: 87%, discharging (-0.50%/min over 0:10:00), 1:23:45 (2:54:00) to empty
+Oct  3 12:10:00 laptop apmd[800]: Using line power; charging battery
+Oct  3 12:20:00 laptop apmd[800]: Battery: 92%, charging (+0.50%/min over 0:10:00), 3:00:00 to empty (0:16:00 to full)
+Oct  3 12:30:00 laptop apmd[800]: Normal Resume
+Oct  3 12:30:00 laptop apmd[800]: Battery: 60%, discharging (-5% over 2:00:00)
+Oct  3 12:40:00 laptop apmd[800]: Warning: Battery: 5%, discharging, 0:06:00 to empty
+Oct  3 12:41:00 laptop apmd[800]: Warning: BATTERY IS LOW
+Oct  3 12:42:00 laptop apmd[800]: Battery: absent
+Oct  3 12:43:00 laptop apmd[800]: Battery: ?%, not charging

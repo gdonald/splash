@@ -1,0 +1,4 @@
+[    1.234567] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+the maintenance window moves to 02:00
+Oct  3 12:00:01 web01 nginx[2200]: worker process 2201 exited on signal 9
+kern  :err   : [ 1234.567890] blk_update_request: I/O error, dev sdb, sector 2048

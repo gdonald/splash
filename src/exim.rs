@@ -10,6 +10,7 @@
 use crate::mail::{self, Words};
 use crate::output::{ParsedLine, Token, TokenKind};
 use crate::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
+use crate::syslog;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -119,7 +120,7 @@ pub fn split_timestamp(line: &str) -> Option<(Vec<Token<'_>>, &str)> {
 
 /// Splits the syslog header off a line Exim sent to syslog.
 fn split_syslog_header(line: &str) -> Option<(Vec<Token<'_>>, &str)> {
-    let header = mail::split_syslog_header(line)?;
+    let header = syslog::split_header(line)?;
 
     if !header.program.starts_with("exim") {
         return None;

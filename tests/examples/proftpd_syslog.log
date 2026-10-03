@@ -1,0 +1,3 @@
+Oct  3 12:00:01 ftp proftpd[4321]: ftp.example.com (client.example.org[10.0.0.5]) - FTP session opened.
+Oct  3 12:00:01 ftp proftpd[4321]: ftp.example.com (client.example.org[10.0.0.5]) - USER alice: Login successful.
+Oct  3 12:00:02 ftp proftpd[4322]: ftp.example.com (10.0.0.9[10.0.0.9]) - USER bob (Login failed): Incorrect password

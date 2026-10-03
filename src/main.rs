@@ -20,8 +20,11 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Log Parsing Mode (caddy, clf, dovecot, exim, fetchmail, haproxy, httpd, postfix, procmail,
-    /// squid, varnish, ad-hoc)
+    /// Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf, cloud-init, cron, distcc, dmesg,
+    /// docker, dovecot, elasticsearch, exim, fetchmail, ftpstats, git, haproxy, httpd, icecast,
+    /// journalctl, kubernetes, mongodb, mysql, nginx-error, oops, php, postfix, postgresql, procmail,
+    /// proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super, syslog, systemd-resolved,
+    /// terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc)
     #[arg(short, long)]
     mode: Option<String>,
 

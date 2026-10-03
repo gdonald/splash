@@ -429,3 +429,548 @@ fn the_procmail_mode_parses_a_folder_line() {
 fn the_procmail_mode_drops_a_line_that_is_not_a_procmail_log() {
     assert!(parse_line("the maintenance window moves to 02:00", "procmail").is_none());
 }
+
+#[test]
+fn the_vsftpd_mode_parses_a_download() {
+    let line = r#"Tue Oct  3 12:00:03 2023 [pid 4322] [alice] OK DOWNLOAD: Client "10.0.0.5", "/home/alice/report.pdf", 4096 bytes, 512.00Kbyte/sec"#;
+    let parsed = parse_line(line, "vsftpd").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Path));
+}
+
+#[test]
+fn the_vsftpd_mode_drops_a_line_that_is_not_a_vsftpd_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "vsftpd").is_none());
+}
+
+#[test]
+fn the_proftpd_mode_parses_an_extended_log_line() {
+    let line = r#"10.0.0.5 - alice [03/Oct/2023:12:00:03 +0000] "RETR report.pdf" 226 4096"#;
+    let parsed = parse_line(line, "proftpd").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Method));
+}
+
+#[test]
+fn the_proftpd_mode_drops_a_line_that_is_not_a_proftpd_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "proftpd").is_none());
+}
+
+#[test]
+fn the_pure_ftpd_mode_parses_a_login() {
+    let line = "Oct  3 12:00:02 ftp pure-ftpd: (?@10.0.0.5) [INFO] alice is now logged in";
+    let parsed = parse_line(line, "pure-ftpd").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_pure_ftpd_mode_drops_a_line_that_is_not_a_pure_ftpd_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "pure-ftpd").is_none());
+}
+
+#[test]
+fn the_xferlog_mode_parses_a_transfer() {
+    let line =
+        "Tue Oct  3 12:00:01 2023 2 10.0.0.5 4096 /home/alice/report.pdf b _ o r alice ftp 0 * c";
+    let parsed = parse_line(line, "xferlog").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Size));
+}
+
+#[test]
+fn the_xferlog_mode_drops_a_line_that_is_not_an_xferlog_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "xferlog").is_none());
+}
+
+#[test]
+fn the_ftpstats_mode_parses_a_transfer() {
+    let line = "1696334401 651c0b41.10e1 alice 10.0.0.5 D 4096 2 /home/alice/report.pdf";
+    let parsed = parse_line(line, "ftpstats").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Transaction));
+}
+
+#[test]
+fn the_ftpstats_mode_drops_a_line_that_is_not_an_ftpstats_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "ftpstats").is_none());
+}
+
+#[test]
+fn the_syslog_mode_parses_a_line_from_any_program() {
+    let line = "Oct  3 12:00:01 web01 nginx[2200]: worker exited";
+    let parsed = parse_line(line, "syslog").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Tag));
+}
+
+#[test]
+fn the_syslog_mode_drops_a_line_that_is_not_a_syslog_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "syslog").is_none());
+}
+
+#[test]
+fn the_journalctl_mode_parses_a_boot_marker() {
+    let line = "-- Boot 6f1d2c3b4a5968778695a4b3c2d1e0f9 --";
+    let parsed = parse_line(line, "journalctl").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Transaction));
+}
+
+#[test]
+fn the_journalctl_mode_drops_a_line_that_is_not_journal_output() {
+    assert!(parse_line("the maintenance window moves to 02:00", "journalctl").is_none());
+}
+
+#[test]
+fn the_dmesg_mode_parses_a_kernel_message() {
+    let line = "[    1.234567] usb 1-1: new high-speed USB device";
+    let parsed = parse_line(line, "dmesg").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Module));
+}
+
+#[test]
+fn the_dmesg_mode_drops_a_line_that_is_not_a_dmesg_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "dmesg").is_none());
+}
+
+#[test]
+fn the_auth_mode_parses_an_accepted_login() {
+    let line = "Oct  3 12:00:01 web01 sshd[4101]: Accepted password for alice";
+    let parsed = parse_line(line, "auth").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_auth_mode_drops_a_line_that_is_not_an_auth_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "auth").is_none());
+}
+
+#[test]
+fn the_cron_mode_parses_a_command() {
+    let line = "Oct  3 12:00:01 web01 CRON[5101]: (root) CMD (run-parts /etc/cron.hourly)";
+    let parsed = parse_line(line, "cron").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Request));
+}
+
+#[test]
+fn the_cron_mode_drops_a_line_that_is_not_a_cron_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "cron").is_none());
+}
+
+#[test]
+fn the_ulogd_mode_parses_a_packet_log() {
+    let line = "Oct  3 12:00:01 fw01 [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.7";
+    let parsed = parse_line(line, "ulogd").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Header));
+}
+
+#[test]
+fn the_ulogd_mode_drops_a_line_that_is_not_a_packet_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "ulogd").is_none());
+}
+
+#[test]
+fn the_php_mode_parses_a_warning() {
+    let line = r#"[03-Oct-2023 12:00:01 UTC] PHP Warning:  Undefined variable $total in /var/www/html/cart.php on line 42"#;
+    let parsed = parse_line(line, "php").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Path));
+}
+
+#[test]
+fn the_php_mode_drops_a_line_that_is_not_a_php_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "php").is_none());
+}
+
+#[test]
+fn the_apache_error_mode_parses_an_error_line() {
+    let line = r#"[Wed Oct 11 14:33:01 2023] [warn] [client 192.168.1.50] mod_deflate: skipping"#;
+    let parsed = parse_line(line, "apache-error").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Warning));
+}
+
+#[test]
+fn the_apache_error_mode_drops_a_line_that_is_not_an_apache_error_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "apache-error").is_none());
+}
+
+#[test]
+fn the_mysql_mode_parses_an_error_log_line() {
+    let line = r#"2023-10-03T12:00:02.234567Z 0 [Warning] [MY-010068] [Server] CA certificate ca.pem is self signed."#;
+    let parsed = parse_line(line, "mysql").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Transaction));
+}
+
+#[test]
+fn the_mysql_mode_drops_a_line_that_is_not_a_mysql_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "mysql").is_none());
+}
+
+#[test]
+fn the_postgresql_mode_parses_a_log_line() {
+    let line = r#"2023-10-03 12:00:01.123 UTC [1234] LOG:  database system is ready to accept connections"#;
+    let parsed = parse_line(line, "postgresql").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Pid));
+}
+
+#[test]
+fn the_postgresql_mode_drops_a_line_that_is_not_a_postgresql_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "postgresql").is_none());
+}
+
+#[test]
+fn the_redis_mode_parses_a_log_line() {
+    let line = r#"1234:M 03 Oct 2023 12:00:00.123 * Ready to accept connections tcp"#;
+    let parsed = parse_line(line, "redis").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_redis_mode_drops_a_line_that_is_not_a_redis_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "redis").is_none());
+}
+
+#[test]
+fn the_mongodb_mode_parses_a_structured_line() {
+    let line = r#"{"t":{"$date":"2023-10-03T12:00:01.123+00:00"},"s":"W","c":"COMMAND","msg":"Slow query"}"#;
+    let parsed = parse_line(line, "mongodb").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Warning));
+}
+
+#[test]
+fn the_mongodb_mode_drops_a_line_that_is_not_a_mongodb_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "mongodb").is_none());
+}
+
+#[test]
+fn the_elasticsearch_mode_parses_a_text_line() {
+    let line =
+        r#"[2023-10-03T12:00:01,123][INFO ][o.e.n.Node               ] [node-1] starting ..."#;
+    let parsed = parse_line(line, "elasticsearch").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Module));
+}
+
+#[test]
+fn the_elasticsearch_mode_drops_a_line_that_is_not_an_elasticsearch_log() {
+    assert!(parse_line("the maintenance window moves to 02:00", "elasticsearch").is_none());
+}
+
+#[test]
+fn the_ssh_mode_parses_a_login() {
+    let line = "Oct  3 12:00:01 web01 sshd[4101]: Accepted password for alice from 10.0.0.5 port 52144 ssh2";
+    let parsed = parse_line(line, "ssh").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Protocol));
+}
+
+#[test]
+fn the_ssh_mode_drops_a_line_that_is_not_an_sshd_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "ssh").is_none());
+}
+
+#[test]
+fn the_sudo_mode_parses_a_command() {
+    let line = "Oct  3 12:00:05 web01 sudo:    alice : TTY=pts/0 ; COMMAND=/usr/bin/apt update";
+    let parsed = parse_line(line, "sudo").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Request));
+}
+
+#[test]
+fn the_sudo_mode_drops_a_line_that_is_not_a_sudo_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "sudo").is_none());
+}
+
+#[test]
+fn the_super_mode_parses_a_command() {
+    let line = "alice@web01 Tue Oct  3 12:00:01 2023\tshutdown (-h now)";
+    let parsed = parse_line(line, "super").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Method));
+}
+
+#[test]
+fn the_super_mode_drops_a_line_that_is_not_a_super_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "super").is_none());
+}
+
+#[test]
+fn the_sulog_mode_parses_a_switch() {
+    let line = "SU 10/03 12:00 + pts/1 alice-root";
+    let parsed = parse_line(line, "sulog").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_sulog_mode_drops_a_line_that_is_not_a_sulog_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "sulog").is_none());
+}
+
+#[test]
+fn the_distcc_mode_parses_a_job_summary() {
+    let line = "distccd[5101] (dcc_job_summary) client: 10.0.0.5:52144 COMPILE_OK exit:0";
+    let parsed = parse_line(line, "distcc").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_distcc_mode_drops_a_line_that_is_not_a_distcc_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "distcc").is_none());
+}
+
+#[test]
+fn the_icecast_mode_parses_an_error_log_line() {
+    let line = "[2023-10-03  12:00:00] INFO main/main Icecast 2.4.4 server started";
+    let parsed = parse_line(line, "icecast").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Level));
+}
+
+#[test]
+fn the_icecast_mode_drops_a_line_that_is_not_an_icecast_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "icecast").is_none());
+}
+
+#[test]
+fn the_apm_mode_parses_a_battery_line() {
+    let line = "Oct  3 12:00:00 laptop apmd[800]: Battery: 87%, discharging";
+    let parsed = parse_line(line, "apm").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Size));
+}
+
+#[test]
+fn the_apm_mode_drops_a_line_that_is_not_an_apmd_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "apm").is_none());
+}
+
+#[test]
+fn the_oops_mode_parses_an_oops_headline() {
+    let line = "Oops: 0000 [#1] PREEMPT SMP NOPTI";
+    let parsed = parse_line(line, "oops").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Failure));
+}
+
+#[test]
+fn the_oops_mode_drops_a_line_that_is_not_part_of_an_oops() {
+    assert!(parse_line("the maintenance window moves to 02:00", "oops").is_none());
+}
+
+#[test]
+fn the_docker_mode_parses_a_daemon_line() {
+    let line = r#"time="2023-10-03T12:00:00Z" level=info msg="Starting up""#;
+    let parsed = parse_line(line, "docker").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Level));
+}
+
+#[test]
+fn the_docker_mode_drops_a_line_that_is_not_a_docker_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "docker").is_none());
+}
+
+#[test]
+fn the_kubernetes_mode_parses_a_klog_line() {
+    let line = r#"I1003 12:00:01.123456       1 controller.go:123] Starting"#;
+    let parsed = parse_line(line, "kubernetes").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Path));
+}
+
+#[test]
+fn the_kubernetes_mode_drops_a_line_that_is_not_a_kubernetes_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "kubernetes").is_none());
+}
+
+#[test]
+fn the_systemd_resolved_mode_parses_a_feature_level_change() {
+    let line = r#"Oct 03 12:00:01 web01 systemd-resolved[600]: Using degraded feature set UDP instead of UDP+EDNS0"#;
+    let parsed = parse_line(line, "systemd-resolved").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Protocol));
+}
+
+#[test]
+fn the_systemd_resolved_mode_drops_a_line_that_is_not_a_systemd_resolved_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "systemd-resolved").is_none());
+}
+
+#[test]
+fn the_nginx_error_mode_parses_an_error_line() {
+    let line = r#"2023/10/03 12:00:04 [notice] 1200#1200: signal process started"#;
+    let parsed = parse_line(line, "nginx-error").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Pid));
+}
+
+#[test]
+fn the_nginx_error_mode_drops_a_line_that_is_not_an_nginx_error_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "nginx-error").is_none());
+}
+
+#[test]
+fn the_git_mode_parses_a_trace_line() {
+    let line = r#"12:00:01.123456 git.c:463               trace: built-in: git fetch"#;
+    let parsed = parse_line(line, "git").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Request));
+}
+
+#[test]
+fn the_git_mode_drops_a_line_that_is_not_a_git_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "git").is_none());
+}
+
+#[test]
+fn the_cloud_init_mode_parses_a_log_line() {
+    let line = r#"2023-10-03 12:00:01,123 - util.py[DEBUG]: Cloud-init v. 23.3.1"#;
+    let parsed = parse_line(line, "cloud-init").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Number));
+}
+
+#[test]
+fn the_cloud_init_mode_drops_a_line_that_is_not_a_cloud_init_line() {
+    assert!(parse_line("the maintenance window moves to 02:00", "cloud-init").is_none());
+}
+
+#[test]
+fn the_terraform_mode_parses_an_operation() {
+    let line = r#"aws_instance.web: Creating..."#;
+    let parsed = parse_line(line, "terraform").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Module));
+}
+
+#[test]
+fn the_terraform_mode_drops_a_line_that_is_not_terraform_output() {
+    assert!(parse_line("the maintenance window moves to 02:00", "terraform").is_none());
+}
+
+#[test]
+fn the_ci_mode_parses_a_build_result() {
+    let parsed = parse_line("Finished: SUCCESS", "ci").unwrap();
+
+    assert!(parsed
+        .tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Success));
+}
+
+#[test]
+fn the_ci_mode_keeps_a_line_of_build_output() {
+    assert!(parse_line("the maintenance window moves to 02:00", "ci").is_some());
+}

@@ -1,0 +1,6 @@
+distccd[5100] (dcc_listen_by_addr) listening on 0.0.0.0:3632
+distccd[5100] (dcc_defer_accept) TCP_DEFER_ACCEPT turned on
+distccd[5101] (dcc_check_client) connection from 10.0.0.5:52144
+distccd[5101] (dcc_job_summary) client: 10.0.0.5:52144 COMPILE_OK exit:0 sig:0 core:0 ret:0 time:1234ms gcc main.c
+distccd[5102] (dcc_job_summary) client: 10.0.0.6:52150 COMPILE_ERROR exit:1 sig:0 core:0 ret:0 time:87ms gcc broken.c
+distccd[5103] (dcc_r_token_int) ERROR: read failed: Connection reset by peer

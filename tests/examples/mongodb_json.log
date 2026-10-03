@@ -1,0 +1,5 @@
+{"t":{"$date":"2023-10-03T12:00:01.123+00:00"},"s":"I",  "c":"NETWORK",  "id":23016,   "ctx":"listener","msg":"Waiting for connections","attr":{"port":27017,"ssl":"off"}}
+{"t":{"$date":"2023-10-03T12:00:02.234+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"10.0.0.5:52144","connectionId":12,"connectionCount":3}}
+{"t":{"$date":"2023-10-03T12:00:03.345+00:00"},"s":"W",  "c":"COMMAND",  "id":51803,   "ctx":"conn12","msg":"Slow query","attr":{"type":"command","ns":"appdb.orders","durationMillis":2345}}
+{"t":{"$date":"2023-10-03T12:00:04.456+00:00"},"s":"E",  "c":"ACCESS",   "id":20249,   "ctx":"conn13","msg":"Authentication failed","attr":{"user":"app","db":"admin","error":"AuthenticationFailed: SCRAM authentication failed"}}
+{"t":{"$date":"2023-10-03T12:00:05.567+00:00"},"s":"D1", "c":"STORAGE",  "id":22430,   "ctx":"Checkpointer","msg":"WiredTiger message","tags":["startupWarnings"]}

@@ -1,0 +1,4 @@
+Oct  3 12:00:01 ftp vsftpd[4321]: CONNECT: Client "10.0.0.5"
+Oct  3 12:00:02 ftp vsftpd[4320]: [alice] OK LOGIN: Client "10.0.0.5"
+Oct  3 12:00:03 ftp vsftpd[4322]: [alice] OK MKDIR: Client "10.0.0.5", "/home/alice/archive"
+Oct  3 12:00:07 ftp vsftpd[4324]: [bob] FAIL LOGIN: Client "::ffff:10.0.0.9"

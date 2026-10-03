@@ -1,0 +1,5 @@
+[2023-10-03  12:00:00] INFO main/main Icecast 2.4.4 server started
+[2023-10-03  12:00:01] INFO connection/_handle_source_request Source logging in at mountpoint "/live.mp3" from 10.0.0.20
+[2023-10-03  12:00:02] WARN source/get_next_buffer Disconnecting source due to socket timeout
+[2023-10-03  12:00:03] EROR sock/sock_write_bytes_wrapper Failed to write to socket
+[2023-10-03  12:00:04] DBUG stats/modify_node_event update "/live.mp3" listeners (2)

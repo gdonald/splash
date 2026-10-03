@@ -1,0 +1,3 @@
+2023-10-03T12:00:02.234567Z 0 [Warning] [MY-010068] [Server] CA certificate ca.pem is self signed.
+the maintenance window moves to 02:00
+# Query_time: 2.345678  Lock_time: 0.000123 Rows_sent: 1  Rows_examined: 1000000

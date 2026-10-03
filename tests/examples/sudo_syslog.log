@@ -1,0 +1,9 @@
+Oct  3 12:00:05 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update
+Oct  3 12:00:05 web01 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)
+Oct  3 12:00:07 web01 sudo:      bob : 3 incorrect password attempts ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash
+Oct  3 12:00:07 web01 sudo:      bob : command not allowed ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/sbin/reboot
+Oct  3 12:00:08 web01 su[4200]: (to root) alice on pts/1
+Oct  3 12:00:09 web01 su[4201]: FAILED SU (to root) bob on pts/1
+Oct  3 12:00:10 web01 su[4202]: Successful su for root by alice
+Oct  3 12:00:10 web01 su[4202]: + /dev/pts/1 alice:root
+Oct  3 12:00:11 web01 su[4203]: - /dev/pts/2 bob:root

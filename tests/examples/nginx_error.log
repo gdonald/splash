@@ -1,0 +1,5 @@
+2023/10/03 12:00:01 [error] 1234#5678: *42 open() "/usr/share/nginx/html/favicon.ico" failed (2: No such file or directory), client: 10.0.0.5, server: example.com, request: "GET /favicon.ico HTTP/1.1", host: "example.com", referrer: "https://example.com/"
+2023/10/03 12:00:02 [error] 1234#5678: *43 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 10.0.0.6, server: example.com, request: "GET /api/orders HTTP/1.1", upstream: "http://127.0.0.1:3000/api/orders", host: "example.com"
+2023/10/03 12:00:03 [warn] 1234#5678: *44 an upstream response is buffered to a temporary file /var/cache/nginx/proxy_temp/1/00/0000000001 while reading upstream, client: 10.0.0.7, server: example.com, request: "GET /report.pdf HTTP/1.1"
+2023/10/03 12:00:04 [notice] 1200#1200: signal process started
+2023/10/03 12:00:05 [emerg] 1200#1200: bind() to 0.0.0.0:80 failed (98: Address already in use)

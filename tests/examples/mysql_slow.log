@@ -1,0 +1,9 @@
+/usr/sbin/mysqld, Version: 8.0.34 (MySQL Community Server - GPL). started with:
+Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
+Time                 Id Command    Argument
+# Time: 2023-10-03T12:00:01.123456Z
+# User@Host: app[app] @ localhost [10.0.0.5]  Id:    42
+# Query_time: 2.345678  Lock_time: 0.000123 Rows_sent: 1  Rows_examined: 1000000
+use appdb;
+SET timestamp=1696334401;
+SELECT * FROM orders WHERE customer_note LIKE '%gift%';

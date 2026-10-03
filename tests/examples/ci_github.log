@@ -1,0 +1,6 @@
+2023-10-03T12:00:01.1234567Z ##[group]Run actions/checkout@v4
+2023-10-03T12:00:01.2345678Z with:
+2023-10-03T12:00:01.3456789Z ##[endgroup]
+2023-10-03T12:00:05.4567890Z npm ERR! Test failed.  See above for more details.
+2023-10-03T12:00:05.5678901Z ##[error]Process completed with exit code 1.
+::warning file=app.js,line=1::Missing semicolon

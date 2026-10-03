@@ -1,0 +1,5 @@
+time="2023-10-03T12:00:00.000000000Z" level=info msg="Starting up"
+time="2023-10-03T12:00:01.123456789Z" level=warning msg="Your kernel does not support swap memory limit"
+time="2023-10-03T12:00:02.234567890Z" level=error msg="Handler for POST /v1.43/containers/create returned error: No such image: app:missing"
+Oct  3 12:00:03 web01 dockerd[900]: time="2023-10-03T12:00:03.345678901Z" level=info msg="ignoring event" container=4f2a1c0123ab module=libcontainerd namespace=moby topic=/tasks/delete type="*events.TaskDelete"
+Oct  3 12:00:04 web01 containerd[800]: time="2023-10-03T12:00:04.456789012Z" level=info msg="shim disconnected" id=4f2a1c0123ab

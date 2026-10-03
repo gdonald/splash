@@ -1,0 +1,4 @@
+Oct  3 12:00:01 git01 git-daemon[3101]: Connection from 10.0.0.5:52144
+the maintenance window moves to 02:00
+Oct  3 12:00:01 git01 sshd[4101]: Accepted password for alice from 10.0.0.5 port 52144 ssh2
+12:00:01.123456 git.c:463               trace: built-in: git fetch origin

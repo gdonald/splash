@@ -1,0 +1,4 @@
+Oct  3 12:00:01 fw01 [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.7 DST=10.0.0.1 LEN=60 PROTO=TCP SPT=40022 DPT=22 SYN URGP=0
+the maintenance window moves to 02:00
+Oct  3 12:00:01 web01 nginx[2200]: worker process 2201 exited on signal 9
+Oct  3 12:00:02 fw01 kernel: DROP IN=eth0 OUT= SRC=2001:db8::7 DST=2001:db8::1 LEN=80 PROTO=TCP SPT=40023 DPT=443 SYN URGP=0

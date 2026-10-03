@@ -8,6 +8,7 @@
 use crate::mail::{self, Words};
 use crate::output::{ParsedLine, Token, TokenKind};
 use crate::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
+use crate::syslog;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -16,7 +17,7 @@ pub const NAME: &str = "procmail";
 
 /// The first line of an abstract: the envelope sender and the date
 static FROM: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&format!(r"^(From) (\S+)(\s+)({})$", mail::CTIME)).unwrap());
+    LazyLock::new(|| Regex::new(&format!(r"^(From) (\S+)(\s+)({})$", syslog::CTIME)).unwrap());
 
 /// The second line of an abstract: the subject
 static SUBJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s+)(Subject):(.*)$").unwrap());
@@ -31,7 +32,7 @@ static DIAGNOSTIC: LazyLock<Regex> =
 
 /// A diagnostic that is only the date, written when `VERBOSE=on` starts
 static DATE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&format!(r"^{}$", mail::CTIME)).unwrap());
+    LazyLock::new(|| Regex::new(&format!(r"^{}$", syslog::CTIME)).unwrap());
 
 /// A quoted file, recipe condition, or assignment inside a diagnostic
 static QUOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""([^"]*)""#).unwrap());

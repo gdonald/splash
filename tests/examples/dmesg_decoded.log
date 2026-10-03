@@ -1,0 +1,7 @@
+kern  :info  : [    1.234567] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+kern  :warn  : [    4.567890] ACPI Warning: SystemIO range conflicts with OpRegion
+kern  :err   : [ 1234.567890] blk_update_request: I/O error, dev sdb, sector 2048
+<6>[    1.234567] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[Tue Oct  3 12:00:01 2023] e1000e 0000:00:19.0 eth0: NIC Link is Down
+2023-10-03T12:00:02,123456+0000 EXT4-fs (sda1): mounted filesystem with ordered data mode
+Oct  3 12:00:03 web01 kernel: [ 3456.789012] Out of memory: Killed process 2201 (nginx)

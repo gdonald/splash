@@ -1,0 +1,9 @@
+Oct  3 12:00:01 web01 CRON[5100]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Oct  3 12:00:01 web01 CRON[5101]: (root) CMD (cd / && run-parts --report /etc/cron.hourly)
+Oct  3 12:00:01 web01 CRON[5100]: pam_unix(cron:session): session closed for user root
+Oct  3 12:00:00 web01 cron[700]: (CRON) INFO (pidfile fd = 3)
+Oct  3 12:05:00 web01 crond[701]: (alice) RELOAD (/var/spool/cron/alice)
+Oct  3 12:06:00 web01 CROND[5200]: (root) CMDEND (/usr/lib64/sa/sa1 1 1)
+Oct  3 12:07:00 web01 cron[700]: (CRON) ERROR (getpwnam() failed): No such file or directory
+Oct  3 12:10:00 web01 anacron[5300]: Job `cron.daily' started
+Oct  3 12:10:30 web01 anacron[5300]: Job `cron.daily' terminated

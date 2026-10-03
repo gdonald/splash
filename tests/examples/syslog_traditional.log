@@ -1,0 +1,6 @@
+Oct  3 12:00:01 web01 nginx[2200]: worker process 2201 exited on signal 9
+Oct  3 12:00:02 web01 systemd[1]: Started Daily apt download activities.
+Oct  3 12:00:03 web01 kernel: Out of memory: Killed process 2201 (nginx)
+Oct  3 12:00:04 web01 rsyslogd: action 'action-1-builtin:omfwd' suspended, next retry is Tue Oct  3 12:00:34 2023
+Oct  3 12:00:05 web01 last message repeated 3 times
+2023-10-03T12:00:06.123456+00:00 web01 app[3300]: connection error from 10.0.0.5

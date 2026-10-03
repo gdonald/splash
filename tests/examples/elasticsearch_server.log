@@ -1,0 +1,5 @@
+[2023-10-03T12:00:01,123][INFO ][o.e.n.Node               ] [node-1] starting ...
+[2023-10-03T12:00:02,234][INFO ][o.e.t.TransportService   ] [node-1] publish_address {10.0.0.11:9300}, bound_addresses {[::]:9300}
+[2023-10-03T12:00:03,345][WARN ][o.e.c.r.a.DiskThresholdMonitor] [node-1] high disk watermark [90%] exceeded on [abc123][node-1][/var/lib/elasticsearch] free: 4.2gb[8.4%]
+[2023-10-03T12:00:04,456][ERROR][o.e.b.ElasticsearchUncaughtExceptionHandler] [node-1] uncaught exception in thread [main]
+[2023-10-03T12:00:05,567][WARN ][i.s.s.query              ] [node-1] [logs][0] took[2.3s], took_millis[2345], total_hits[10 hits], stats[], search_type[QUERY_THEN_FETCH], total_shards[5], source[{"query":{"match_all":{}}}], id[],

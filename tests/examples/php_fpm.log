@@ -1,0 +1,6 @@
+[03-Oct-2023 12:00:00] NOTICE: fpm is running, pid 1000
+[03-Oct-2023 12:00:00] NOTICE: ready to handle connections
+[03-Oct-2023 12:00:06] WARNING: [pool www] child 1234 said into stderr: "PHP Warning:  Undefined variable $total in /var/www/html/cart.php on line 42"
+[03-Oct-2023 12:00:07] WARNING: [pool www] server reached pm.max_children setting (5), consider raising it
+[03-Oct-2023 12:00:08] WARNING: [pool www] child 1235 exited on signal 11 (SIGSEGV) after 12.345678 seconds from start
+[03-Oct-2023 12:00:09.123456] DEBUG: pid 1000, fpm_pctl_perform_idle_server_maintenance(), line 378: [pool www] currently 2 active children, 3 spare children

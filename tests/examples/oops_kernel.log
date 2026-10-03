@@ -1,0 +1,20 @@
+[ 1234.567890] BUG: kernel NULL pointer dereference, address: 0000000000000008
+[ 1234.567901] #PF: supervisor read access in kernel mode
+[ 1234.567912] #PF: error_code(0x0000) - not-present page
+[ 1234.567923] PGD 0 P4D 0
+[ 1234.567934] Oops: 0000 [#1] PREEMPT SMP NOPTI
+[ 1234.567945] CPU: 3 PID: 2201 Comm: nginx Tainted: G           O       6.1.0-13-amd64 #1  Debian 6.1.55-1
+[ 1234.567956] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-debian-1.16.2-1 04/01/2014
+[ 1234.567967] RIP: 0010:ext4_do_writepages+0x1a/0x40 [ext4]
+[ 1234.567978] Code: 48 89 e5 41 57 41 56 <48> 8b 47 08 48 85 c0 74 1e
+[ 1234.567989] RSP: 0018:ffffb1c2c0a3fd28 EFLAGS: 00010246
+[ 1234.568000] RAX: 0000000000000000 RBX: ffff9e8a4b2c0000 RCX: 0000000000000000
+[ 1234.568011] Call Trace:
+[ 1234.568022]  <TASK>
+[ 1234.568033]  ? __die+0x23/0x70
+[ 1234.568044]  ext4_writepages+0x1a/0x30 [ext4]
+[ 1234.568055]  </TASK>
+[ 1234.568066] Modules linked in: ext4 mbcache jbd2 crc32c_intel
+[ 1234.568077] CR2: 0000000000000008
+[ 1234.568088] ---[ end trace 0000000000000000 ]---
+[ 1234.568099] Kernel panic - not syncing: Fatal exception

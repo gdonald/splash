@@ -1,0 +1,9 @@
+-- Journal begins at Mon 2023-10-02 08:00:00 UTC, ends at Tue 2023-10-03 12:00:09 UTC. --
+Oct 03 12:00:01 web01 systemd[1]: Starting nginx.service - A high performance web server...
+Oct 03 12:00:02 web01 systemd[1]: Started nginx.service - A high performance web server.
+Oct 03 12:00:03 web01 systemd[1]: Reached target multi-user.target - Multi-User System.
+Oct 03 12:00:04 web01 systemd[1]: app.service: Main process exited, code=exited, status=1/FAILURE
+Oct 03 12:00:05 web01 systemd[1]: app.service: Failed with result 'exit-code'.
+Oct 03 12:00:06 web01 systemd[1]: Failed to start app.service - Application server.
+-- Boot 6f1d2c3b4a5968778695a4b3c2d1e0f9 --
+Oct 03 12:00:09 web01 kernel: Linux version 6.1.0-13-amd64

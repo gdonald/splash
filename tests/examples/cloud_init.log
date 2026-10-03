@@ -1,0 +1,6 @@
+2023-10-03 12:00:01,123 - util.py[DEBUG]: Cloud-init v. 23.3.1 running 'init-local' at Tue, 03 Oct 2023 12:00:01 +0000. Up 5.12 seconds.
+2023-10-03 12:00:02,234 - handlers.py[DEBUG]: start: init-network/config-ssh: running config-ssh with frequency once-per-instance
+2023-10-03 12:00:03,345 - handlers.py[DEBUG]: finish: init-network/config-ssh: SUCCESS: config-ssh ran successfully
+2023-10-03 12:00:04,456 - util.py[WARNING]: Failed to set hostname to web01
+2023-10-03 12:00:05,567 - cc_scripts_user.py[ERROR]: Failed to run module scripts-user (scripts in /var/lib/cloud/instance/scripts)
+Oct  3 12:00:06 web01 cloud-init[1200]: [CLOUDINIT] util.py[DEBUG]: Cloud-init v. 23.3.1 finished at Tue, 03 Oct 2023 12:00:06 +0000. Datasource DataSourceEc2Local.  Up 42.00 seconds

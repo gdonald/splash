@@ -1,0 +1,4 @@
+I1003 12:00:01.123456       1 controller.go:123] Starting endpoint controller
+the maintenance window moves to 02:00
+Oct  3 12:00:01 node01 sshd[4101]: Accepted password for alice from 10.0.0.5 port 52144 ssh2
+2023-10-03T12:00:01.123456789Z stdout F listening on :8080

@@ -1,0 +1,4 @@
+alice@web01 Tue Oct  3 12:00:01 2023	shutdown (-h now)
+super: bob@web01 Tue Oct  3 12:05:00 2023	backup
+alice@web01 Tue Oct  3 12:06:00 2023	Permission denied: you may not run restart
+Oct  3 12:00:01 web01 super[4300]: shutdown (-h now)

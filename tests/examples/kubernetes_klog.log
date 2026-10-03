@@ -1,0 +1,5 @@
+I1003 12:00:01.123456       1 controller.go:123] Starting endpoint controller
+W1003 12:00:02.234567       1 reflector.go:424] watch of *v1.Pod ended with: an error on the server has prevented the request from succeeding
+E1003 12:00:03.345678    1234 pod_workers.go:965] "Error syncing pod, skipping" err="failed to \"StartContainer\"" pod="default/web-0" podUID="0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+I1003 12:00:04.456789    1234 kubelet.go:2203] "SyncLoop ADD" source="api" pods=["default/web-0"]
+Oct  3 12:00:05 node01 kubelet[1234]: I1003 12:00:05.567890    1234 kubelet_node_status.go:70] "Attempting to register node" node="node01"

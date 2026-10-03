@@ -1,0 +1,3 @@
+12:00:01.123456 git.c:463               trace: built-in: git fetch origin
+12:00:01.234567 run-command.c:659       trace: run_command: GIT_DIR=.git git remote-https origin https://git.example.com/app.git
+12:00:01.345678 exec-cmd.c:237          trace: resolved executable dir: /usr/lib/git-core

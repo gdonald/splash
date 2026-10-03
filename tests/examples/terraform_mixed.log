@@ -1,0 +1,3 @@
+aws_instance.web: Creating...
+the maintenance window moves to 02:00
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.

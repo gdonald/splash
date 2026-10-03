@@ -1,0 +1,6 @@
+Oct  3 12:00:01 ftp pure-ftpd: (?@10.0.0.5) [INFO] New connection from 10.0.0.5
+Oct  3 12:00:02 ftp pure-ftpd: (?@10.0.0.5) [INFO] alice is now logged in
+Oct  3 12:00:03 ftp pure-ftpd: (alice@10.0.0.5) [NOTICE] /home/alice//report.pdf downloaded  (4096 bytes, 512.00KB/sec)
+Oct  3 12:00:04 ftp pure-ftpd: (alice@10.0.0.5) [NOTICE] /home/alice//backup.tar partially uploaded  (1048576 bytes, 1.50MB/sec)
+Oct  3 12:00:05 ftp pure-ftpd: (?@10.0.0.9) [WARNING] Authentication failed for user [bob]
+Oct  3 12:00:06 ftp pure-ftpd: (alice@10.0.0.5) [INFO] Logout.

@@ -1,0 +1,7 @@
+2023-10-03 12:00:01.123 UTC [1234] LOG:  database system is ready to accept connections
+2023-10-03 12:00:02.234 UTC [1301] ERROR:  relation "users" does not exist at character 15
+2023-10-03 12:00:02.234 UTC [1301] STATEMENT:  SELECT * FROM users;
+2023-10-03 12:00:03.345 UTC [1302] FATAL:  password authentication failed for user "app"
+2023-10-03 12:00:03.345 UTC [1302] DETAIL:  Connection matched pg_hba.conf line 99: "host all all 0.0.0.0/0 scram-sha-256"
+2023-10-03 12:00:04.456 UTC [1303] LOG:  duration: 2345.678 ms  statement: SELECT count(*) FROM orders;
+2023-10-03 12:00:05.567 UTC [1304] WARNING:  there is no transaction in progress

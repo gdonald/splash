@@ -1,0 +1,3 @@
+alice@web01 Tue Oct  3 12:00:01 2023	shutdown (-h now)
+the maintenance window moves to 02:00
+Oct  3 12:00:01 web01 super[4300]: shutdown (-h now)

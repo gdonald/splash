@@ -1,0 +1,5 @@
+Oct  3 12:00:02 ftp pure-ftpd: (?@10.0.0.5) [INFO] alice is now logged in
+the maintenance window moves to 02:00
+2023-10-03 12:00:03 10.0.0.5 []sent /home/alice/report.pdf 226 alice 4096
+Oct  3 12:00:03 mail postfix/qmgr[900]: 4F2A1C0123: removed
+10.0.0.5 - alice [03/Oct/2023:12:00:03 +0000] "PUT /home/alice/notes.txt" 200 512

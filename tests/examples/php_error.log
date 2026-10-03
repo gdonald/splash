@@ -1,0 +1,9 @@
+[03-Oct-2023 12:00:01 UTC] PHP Warning:  Undefined variable $total in /var/www/html/cart.php on line 42
+[03-Oct-2023 12:00:02 UTC] PHP Notice:  Undefined index: id in /var/www/html/item.php on line 7
+[03-Oct-2023 12:00:03 UTC] PHP Deprecated:  strftime() is deprecated in /var/www/html/report.php on line 15
+[03-Oct-2023 12:00:04 Europe/Berlin] PHP Parse error:  syntax error, unexpected token "}" in /var/www/html/broken.php on line 3
+[03-Oct-2023 12:00:05 UTC] PHP Fatal error:  Uncaught Exception: Payment gateway timed out in /var/www/html/pay.php:88
+Stack trace:
+#0 /var/www/html/checkout.php(20): charge()
+#1 {main}
+  thrown in /var/www/html/pay.php on line 88

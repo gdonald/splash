@@ -1,39 +1,13 @@
 //! Pieces shared by the mail server plugins
 //!
 //! Postfix, Exim, Dovecot, and Fetchmail all write their messages as free
-//! text sprinkled with `key=value` fields and mail addresses, and most of them
-//! arrive behind a syslog header. The header, the fields, and the addresses
-//! are read here, and each plugin supplies the words that say whether its
-//! mail went through.
+//! text sprinkled with `key=value` fields and mail addresses. The fields and
+//! the addresses are read here, and each plugin supplies the words that say
+//! whether its mail went through.
 use crate::output::{Token, TokenKind};
 use crate::parser::push_message;
 use regex::Regex;
 use std::sync::LazyLock;
-
-/// The syslog header, in either the traditional form
-/// `Oct  3 12:00:01 mail postfix/smtpd[1234]: ` or the RFC 3339 form
-/// `2023-10-03T12:00:01.123456+00:00 mail postfix/smtpd[1234]: `
-static SYSLOG_HEADER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?x)
-        ^
-        (
-            [A-Z][a-z]{2}\s+\d{1,2}\ \d{2}:\d{2}:\d{2}
-            |
-            \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[-+]\d{2}:\d{2})
-        )                   # timestamp
-        \ (\S+)             # host
-        \ ([^\s\[:]+)       # program
-        (?:\[(\d+)\])?      # process id
-        :\x20
-        ",
-    )
-    .unwrap()
-});
-
-/// A date in the form `ctime` writes, such as `Tue Oct  3 12:00:01 2023`. The
-/// spaces are escaped so the pattern reads the same with or without `(?x)`.
-pub const CTIME: &str = r"[A-Z][a-z]{2}\ [A-Z][a-z]{2}\ [\ \d]\d\ \d{2}:\d{2}:\d{2}\ \d{4}";
 
 /// A `key=value` field, whose value may be quoted or wrapped in angle
 /// brackets, or a mail address standing on its own
@@ -55,47 +29,6 @@ static FIELD: LazyLock<Regex> = LazyLock::new(|| {
 static HOST_ADDRESS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([^\[]*)\[([^\]]*)\](.*)$").unwrap());
 
-/// The syslog header of a line, split into tokens
-pub struct SyslogHeader<'a> {
-    pub tokens: Vec<Token<'a>>,
-    pub program: &'a str,
-    pub body: &'a str,
-}
-
-/// Splits the syslog header off a line, or returns `None` when the line does
-/// not start with one.
-pub fn split_syslog_header(line: &str) -> Option<SyslogHeader<'_>> {
-    let caps = SYSLOG_HEADER.captures(line)?;
-    let field = |index: usize| caps.get(index).unwrap().as_str();
-
-    let mut tokens = vec![
-        Token::new(field(1), TokenKind::Timestamp),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(2), TokenKind::Host),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(3), TokenKind::Tag),
-    ];
-
-    if let Some(pid) = caps.get(4) {
-        tokens.extend([
-            Token::new("[", TokenKind::Punctuation),
-            Token::new(pid.as_str(), TokenKind::Pid),
-            Token::new("]", TokenKind::Punctuation),
-        ]);
-    }
-
-    tokens.extend([
-        Token::new(":", TokenKind::Punctuation),
-        Token::new(" ", TokenKind::Plain),
-    ]);
-
-    Some(SyslogHeader {
-        tokens,
-        program: field(3),
-        body: &line[caps.get(0).unwrap().end()..],
-    })
-}
-
 /// Words a plugin colors by what they say about the mail, such as `flushed`
 /// or `auth failed`
 pub struct Words {
@@ -116,6 +49,11 @@ impl Words {
             pattern: Regex::new(&format!(r"\b(?:{})\b", alternatives.join("|"))).unwrap(),
             kinds,
         }
+    }
+
+    /// Whether any of the words appear in the text
+    pub fn is_match(&self, text: &str) -> bool {
+        self.pattern.is_match(text)
     }
 
     /// The kind given to a matched word

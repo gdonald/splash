@@ -1,0 +1,14 @@
+  # aws_instance.web will be created
+  + resource "aws_instance" "web" {
+      + ami           = "ami-0abcdef1234567890"
+      ~ tags          = {
+      - monitoring    = true -> null
+Plan: 1 to add, 1 to change, 0 to destroy.
+aws_instance.web: Creating...
+aws_instance.web: Still creating... [10s elapsed]
+aws_instance.web: Creation complete after 32s [id=i-0abc123def4567890]
+aws_s3_bucket.logs: Destruction complete after 2s
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+╷
+│ Error: Invalid reference
+╵

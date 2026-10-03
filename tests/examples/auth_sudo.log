@@ -1,0 +1,5 @@
+Oct  3 12:00:05 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update
+Oct  3 12:00:05 web01 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)
+Oct  3 12:00:06 web01 sudo: pam_unix(sudo:auth): authentication failure; logname=bob uid=1001 euid=0 tty=/dev/pts/1 ruser=bob rhost=  user=bob
+Oct  3 12:00:07 web01 sudo:      bob : user NOT in sudoers ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash
+Oct  3 12:00:08 web01 su[4200]: FAILED SU (to root) bob on pts/1
