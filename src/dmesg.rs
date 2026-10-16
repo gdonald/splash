@@ -97,6 +97,16 @@ impl Plugin for DmesgPlugin {
             None => ParseResult::NoMatch,
         }
     }
+
+    /// A raw priority is also how a syslog message arrives off the wire, so a
+    /// line counts as dmesg output only for what follows its priority.
+    fn can_parse(&self, line: &str) -> bool {
+        let rest = syslog::split_priority(line)
+            .map(|(_, after)| after)
+            .unwrap_or(line);
+
+        split_prefix(rest).is_some()
+    }
 }
 
 /// The kind a `dmesg -x` level is colored in

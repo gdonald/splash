@@ -1,0 +1,3 @@
+1614729600.123    123 10.0.0.5 TCP_MISS/200 4512 GET http://example.com/ - HIER_DIRECT/93.184.216.34 text/html
+1614729601.004     12 10.0.0.42 TCP_MEM_HIT/200 8810 GET http://example.com/app.css alice NONE/- text/css
+127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326

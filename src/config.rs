@@ -4,6 +4,9 @@
 //! file sets the default mode and output format, overrides individual token
 //! colors, and holds a table of settings per plugin. Command line options win
 //! over the file, and saved color profiles live in `~/.splash/profiles/`.
+use crate::dates::{DateOptions, DateRewrite, UnknownZone};
+use crate::filter::{Filter, FilterError, FilterOptions};
+use crate::keywords::{KeywordError, Keywords};
 use crate::output::{OutputMode, UnknownOutputMode};
 use crate::theme::{Theme, ThemeError};
 use crate::toml::{self, TomlError};
@@ -29,6 +32,10 @@ pub enum ConfigError {
     BadJobs(String),
     ProfileNotFound { name: String, path: String },
     BadOverride(String),
+    Filter(FilterError),
+    Zone(UnknownZone),
+    Keyword(KeywordError),
+    BadWordcolor(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -52,6 +59,14 @@ impl fmt::Display for ConfigError {
                 "Invalid color override '{}' (expected KEY=COLOR, such as ip=cyan)",
                 value
             ),
+            ConfigError::Filter(error) => write!(f, "{}", error),
+            ConfigError::Zone(error) => write!(f, "{}", error),
+            ConfigError::Keyword(error) => write!(f, "{}", error),
+            ConfigError::BadWordcolor(value) => write!(
+                f,
+                "Invalid wordcolor setting '{}' (expected true or false)",
+                value
+            ),
         }
     }
 }
@@ -61,6 +76,24 @@ impl std::error::Error for ConfigError {}
 impl From<ThemeError> for ConfigError {
     fn from(error: ThemeError) -> Self {
         ConfigError::Theme(error)
+    }
+}
+
+impl From<FilterError> for ConfigError {
+    fn from(error: FilterError) -> Self {
+        ConfigError::Filter(error)
+    }
+}
+
+impl From<KeywordError> for ConfigError {
+    fn from(error: KeywordError) -> Self {
+        ConfigError::Keyword(error)
+    }
+}
+
+impl From<UnknownZone> for ConfigError {
+    fn from(error: UnknownZone) -> Self {
+        ConfigError::Zone(error)
     }
 }
 
@@ -79,6 +112,9 @@ pub struct Config {
     pub jobs: Option<String>,
     pub colors: Vec<(String, String)>,
     pub plugins: BTreeMap<String, BTreeMap<String, String>>,
+    pub wordcolor: Option<String>,
+    pub keywords: Vec<(String, String)>,
+    pub patterns: Vec<(String, String)>,
 }
 
 impl Config {
@@ -100,6 +136,9 @@ impl Config {
                 ["theme"] => config.theme = Some(value),
                 ["jobs"] => config.jobs = Some(value),
                 ["colors", name] => config.colors.push((name.to_string(), value)),
+                ["wordcolor"] => config.wordcolor = Some(value),
+                ["keywords", name] => config.keywords.push((name.to_string(), value)),
+                ["patterns", name] => config.patterns.push((name.to_string(), value)),
                 ["plugins", plugin, name] => {
                     config
                         .plugins
@@ -298,6 +337,9 @@ pub struct Options {
     pub profile: Option<String>,
     pub colors: Vec<String>,
     pub jobs: Option<usize>,
+    pub filter: FilterOptions,
+    pub dates: DateOptions,
+    pub no_wordcolor: bool,
 }
 
 /// The parsing mode, output format, and theme splash will run with
@@ -307,6 +349,9 @@ pub struct Settings {
     pub output_mode: OutputMode,
     pub theme: Theme,
     pub jobs: usize,
+    pub filter: Filter,
+    pub dates: DateRewrite,
+    pub keywords: Keywords,
 }
 
 /// Mode used when neither the command line nor the config file names one
@@ -357,8 +402,27 @@ impl Settings {
             output_mode: output.parse()?,
             theme,
             jobs: resolve_jobs(options.jobs, config.jobs.as_deref())?,
+            filter: Filter::build(&options.filter)?,
+            dates: DateRewrite::build(&options.dates)?,
+            keywords: resolve_keywords(options.no_wordcolor, config)?,
         })
     }
+}
+
+/// The keywords to style: the built-in ones and the config file's, unless
+/// `--no-wordcolor` or `wordcolor = false` turns keyword styling off
+fn resolve_keywords(no_wordcolor: bool, config: &Config) -> Result<Keywords, ConfigError> {
+    let enabled = match config.wordcolor.as_deref() {
+        None | Some("true") => true,
+        Some("false") => false,
+        Some(value) => return Err(ConfigError::BadWordcolor(value.to_string())),
+    };
+
+    if no_wordcolor || !enabled {
+        return Ok(Keywords::none());
+    }
+
+    Ok(Keywords::build(&config.keywords, &config.patterns)?)
 }
 
 /// The worker count to render with, which defaults to the number of threads

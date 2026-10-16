@@ -210,6 +210,9 @@ impl Theme {
                 Style::bold(Color::BrightGreen),
                 Style::bold(Color::BrightYellow),
                 Style::bold(Color::BrightRed),
+                Style::bold(Color::BrightRed),
+                Style::bold(Color::BrightYellow),
+                Style::new(Color::BrightCyan),
             ],
         )
     }
@@ -267,6 +270,9 @@ impl Theme {
                 Style::bold(Color::Green),
                 Style::bold(Color::Yellow),
                 Style::bold(Color::Red),
+                Style::bold(Color::Red),
+                Style::bold(Color::Magenta),
+                Style::new(Color::Blue),
             ],
         )
     }
@@ -334,6 +340,9 @@ impl Theme {
                 Style::bold(green),
                 Style::bold(yellow),
                 Style::bold(red),
+                Style::bold(red),
+                Style::bold(yellow),
+                Style::new(cyan),
             ],
         )
     }
@@ -400,6 +409,9 @@ impl Theme {
                 Style::bold(green),
                 Style::bold(yellow),
                 Style::bold(red),
+                Style::bold(red),
+                Style::bold(yellow),
+                Style::new(cyan),
             ],
         )
     }

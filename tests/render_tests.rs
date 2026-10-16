@@ -1,11 +1,12 @@
 use splash::config::{Config, Options, Profiles, Settings};
+use splash::filter::{Entry, FilterOptions};
 use splash::output::OutputMode;
-use splash::render_file;
 use splash::theme::Theme;
 use splash::{
-    default_jobs, render_contents, render_contents_with_jobs, render_lines, render_lines_with_jobs,
-    PARALLEL_THRESHOLD,
+    default_jobs, render_contents, render_contents_settings, render_contents_with_jobs,
+    render_lines, render_lines_with_jobs, render_settings, PARALLEL_THRESHOLD,
 };
+use splash::{render_file, resolve_file_settings};
 
 const CLF_LINES: &str = concat!(
     "127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] \"GET /apache_pb.gif HTTP/1.0\" 200 2326\n",
@@ -235,4 +236,180 @@ fn a_missing_log_file_is_reported() {
         &settings("ad-hoc", 1)
     )
     .is_err());
+}
+
+const AUTO_LINES: &str = concat!(
+    "Oct  3 12:00:01 mail postfix/smtpd[1234]: connect from unknown[10.0.0.5]\n",
+    "Oct  3 12:00:01 mail postfix/smtpd[1234]: 4F2A1C0123: client=unknown[10.0.0.5]\n",
+    "maintenance window moves to 02:00\n",
+);
+
+#[test]
+fn rendering_in_auto_mode_keeps_lines_the_detected_mode_does_not_read() {
+    let rendered = render_contents(AUTO_LINES, "auto", OutputMode::Plain, &Theme::default());
+
+    assert_eq!(rendered, AUTO_LINES);
+}
+
+#[test]
+fn rendering_in_auto_mode_across_workers_detects_the_format_once() {
+    let contents = AUTO_LINES.repeat(PARALLEL_THRESHOLD);
+
+    assert_eq!(
+        render_contents_with_jobs(&contents, "auto", OutputMode::Json, &Theme::default(), 4),
+        render_contents(
+            &contents,
+            "auto:postfix",
+            OutputMode::Json,
+            &Theme::default()
+        )
+    );
+}
+
+#[test]
+fn a_log_file_in_auto_mode_is_rendered_with_the_mode_its_first_lines_detect() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let path = directory.path().join("mail.log");
+    std::fs::write(&path, AUTO_LINES).unwrap();
+
+    assert_eq!(
+        resolve_file_settings(&path, &settings("auto", 1))
+            .unwrap()
+            .mode,
+        "auto:postfix"
+    );
+}
+
+#[test]
+fn a_log_file_with_a_named_mode_keeps_that_mode() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let path = directory.path().join("mail.log");
+    std::fs::write(&path, AUTO_LINES).unwrap();
+
+    assert_eq!(
+        resolve_file_settings(&path, &settings("syslog", 1)).unwrap(),
+        settings("syslog", 1)
+    );
+}
+
+#[test]
+fn resolving_settings_for_a_missing_log_file_is_reported() {
+    let directory = tempfile::TempDir::new().unwrap();
+
+    assert!(
+        resolve_file_settings(&directory.path().join("missing.log"), &settings("auto", 1)).is_err()
+    );
+}
+
+const ENTRIES: &str = concat!(
+    "[2023-10-03T12:00:01,123][INFO ][o.e.n.Node] [node-1] starting ...\n",
+    "[2023-10-03T12:00:04,456][ERROR][o.e.b.Handler] [node-1] uncaught exception in thread [main]\n",
+    "java.lang.IllegalStateException: failed to obtain node locks\n",
+    "[2023-10-03T12:00:05,567][INFO ][o.e.n.Node] [node-1] stopping ...\n",
+);
+
+fn filtered(jobs: usize, filter: FilterOptions) -> Settings {
+    let options = Options {
+        mode: Some("auto".to_string()),
+        output: Some("plain".to_string()),
+        jobs: Some(jobs),
+        filter,
+        ..Options::default()
+    };
+
+    Settings::resolve(
+        &options,
+        &Config::default(),
+        &Profiles::new(std::path::PathBuf::from("unused")),
+    )
+    .unwrap()
+}
+
+fn error_level() -> FilterOptions {
+    FilterOptions {
+        levels: vec!["error".to_string()],
+        ..FilterOptions::default()
+    }
+}
+
+#[test]
+fn rendering_with_a_level_filter_keeps_the_lines_belonging_to_a_kept_entry() {
+    let rendered = render_settings(ENTRIES, &filtered(1, error_level()), &mut Entry::default());
+
+    assert_eq!(
+        rendered,
+        vec![
+            "[2023-10-03T12:00:04,456][ERROR][o.e.b.Handler] [node-1] uncaught exception in thread [main]",
+            "java.lang.IllegalStateException: failed to obtain node locks",
+        ]
+    );
+}
+
+#[test]
+fn rendering_with_filters_across_workers_matches_rendering_on_one_thread() {
+    let contents = ENTRIES.repeat(PARALLEL_THRESHOLD);
+
+    assert_eq!(
+        render_settings(
+            &contents,
+            &filtered(4, error_level()),
+            &mut Entry::default()
+        ),
+        render_settings(
+            &contents,
+            &filtered(1, error_level()),
+            &mut Entry::default()
+        )
+    );
+}
+
+#[test]
+fn the_entry_a_chunk_ends_in_carries_over_to_the_next_chunk() {
+    let settings = filtered(1, error_level());
+    let mut entry = Entry::default();
+
+    render_settings(
+        "[2023-10-03T12:00:04,456][ERROR][o.e.b.Handler] [node-1] uncaught exception\n",
+        &settings,
+        &mut entry,
+    );
+
+    assert_eq!(
+        render_contents_settings("    at main.rs:42\n", &settings, &mut entry),
+        "at main.rs:42\n"
+    );
+}
+
+#[test]
+fn rendering_with_grep_highlights_the_match() {
+    let settings = Settings {
+        output_mode: OutputMode::Json,
+        ..filtered(
+            1,
+            FilterOptions {
+                grep: vec!["node locks".to_string()],
+                ..FilterOptions::default()
+            },
+        )
+    };
+
+    let rendered = render_settings(ENTRIES, &settings, &mut Entry::default());
+
+    assert_eq!(rendered.len(), 1);
+    assert!(rendered[0].contains(r#"{"kind":"match","text":"node"}"#));
+}
+
+#[test]
+fn a_log_file_is_rendered_with_its_filters() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let path = directory.path().join("app.log");
+    std::fs::write(&path, ENTRIES).unwrap();
+
+    assert_eq!(
+        render_file(&path, &filtered(1, error_level()))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
 }

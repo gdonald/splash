@@ -60,12 +60,12 @@ fn a_delivery_line_colors_the_recipient_as_an_email() {
 
 #[test]
 fn a_delivery_line_colors_the_relay_and_its_address() {
-    let hosts: Vec<&str> = postfix::parse_line(DELIVERY)
+    let hosts: Vec<String> = postfix::parse_line(DELIVERY)
         .unwrap()
         .tokens
         .iter()
         .filter(|token| token.kind == TokenKind::Host)
-        .map(|token| token.text)
+        .map(|token| token.text.to_string())
         .collect();
 
     assert_eq!(hosts, vec!["mail", "mx.example.org"]);

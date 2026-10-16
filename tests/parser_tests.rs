@@ -198,7 +198,7 @@ fn adhoc_tokens_borrow_the_text_of_the_line_they_came_from() {
             continue;
         }
 
-        assert!(borrows_from(&line, token.text), "copied {:?}", token.text);
+        assert!(borrows_from(&line, &token.text), "copied {:?}", token.text);
     }
 }
 
@@ -214,7 +214,7 @@ fn clf_tokens_borrow_the_text_of_the_line_they_came_from() {
             continue;
         }
 
-        assert!(borrows_from(&line, token.text), "copied {:?}", token.text);
+        assert!(borrows_from(&line, &token.text), "copied {:?}", token.text);
     }
 }
 
@@ -973,4 +973,14 @@ fn the_ci_mode_parses_a_build_result() {
 #[test]
 fn the_ci_mode_keeps_a_line_of_build_output() {
     assert!(parse_line("the maintenance window moves to 02:00", "ci").is_some());
+}
+
+#[test]
+fn auto_mode_parses_a_line_no_mode_reads_as_ad_hoc() {
+    let parsed = parse_line("GET 404", "auto").unwrap();
+
+    assert_eq!(
+        kinds(&parsed),
+        vec![TokenKind::HttpVerb, TokenKind::Plain, TokenKind::Number]
+    );
 }

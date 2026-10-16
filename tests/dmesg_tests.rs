@@ -224,3 +224,13 @@ fn the_plugin_is_confident_about_a_log_made_only_of_lines_it_reads() {
         1.0
     );
 }
+
+#[test]
+fn the_plugin_does_not_detect_a_syslog_message_read_off_the_wire() {
+    assert!(!DmesgPlugin::new().can_parse("<34>Oct 11 22:14:15 mymachine su: 'su root' failed"));
+}
+
+#[test]
+fn the_plugin_detects_a_kernel_line_behind_a_raw_priority() {
+    assert!(DmesgPlugin::new().can_parse("<6>Oct  3 12:00:03 web01 kernel: usb 1-1: reset"));
+}

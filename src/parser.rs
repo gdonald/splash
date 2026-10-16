@@ -2,6 +2,7 @@
 ///
 /// Parsing is separated from rendering so that a single parse of a log line
 /// can be emitted as ANSI, HTML, JSON, or plain text.
+use crate::detect;
 use crate::output::{ParsedLine, Token, TokenKind};
 use crate::plugin::ParseResult;
 use crate::registry;
@@ -107,6 +108,10 @@ pub fn push_message<'a>(tokens: &mut Vec<Token<'a>>, message: &'a str) {
 pub fn parse_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> {
     if line.is_empty() {
         return None;
+    }
+
+    if detect::is_auto(mode) {
+        return detect::parse_auto_line(line, mode);
     }
 
     match mode {

@@ -279,3 +279,24 @@ fn curses_output_colorizes_lines_the_same_way_ansi_does() {
         OutputMode::Ansi.render(&line, &Theme::default())
     );
 }
+
+#[test]
+fn a_slice_of_a_borrowed_token_borrows_the_same_text() {
+    let line = String::from("connect from 10.0.0.5");
+    let token = Token::new(&line, TokenKind::Message);
+
+    assert!(matches!(
+        token.slice(8, 12).text,
+        std::borrow::Cow::Borrowed("from")
+    ));
+}
+
+#[test]
+fn a_slice_of_an_owned_token_keeps_its_style() {
+    let token = Token::owned("2023-10-03T12:00:01Z".to_string(), TokenKind::Timestamp);
+
+    assert_eq!(
+        token.slice(0, 10),
+        Token::new("2023-10-03", TokenKind::Timestamp)
+    );
+}

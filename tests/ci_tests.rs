@@ -197,3 +197,11 @@ fn the_plugin_is_not_confident_about_lines_without_ci_markers() {
 fn the_plugin_is_not_confident_about_an_empty_sample() {
     assert_eq!(CiPlugin::new().detect_format(&[]), 0.0);
 }
+
+#[test]
+fn the_plugin_is_confident_about_build_output_between_ci_markers() {
+    assert_eq!(
+        CiPlugin::new().detect_format(&["compiling main.c", GROUP, "linking"]),
+        1.0
+    );
+}

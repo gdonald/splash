@@ -1,0 +1,7 @@
+[2023-10-03T12:00:01,123][INFO ][o.e.n.Node               ] [node-1] starting ...
+[2023-10-03T12:00:02,234][INFO ][o.e.t.TransportService   ] [node-1] publish_address {10.0.0.11:9300}
+[2023-10-03T12:00:03,345][WARN ][o.e.c.r.a.DiskThresholdMonitor] [node-1] high disk watermark [90%] exceeded on [node-1]
+[2023-10-03T12:00:04,456][ERROR][o.e.b.ElasticsearchUncaughtExceptionHandler] [node-1] uncaught exception in thread [main]
+java.lang.IllegalStateException: failed to obtain node locks
+	at org.elasticsearch.env.NodeEnvironment.<init>(NodeEnvironment.java:298)
+[2023-10-03T12:00:05,567][INFO ][o.e.n.Node               ] [node-1] stopping ...

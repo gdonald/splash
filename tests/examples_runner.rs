@@ -5893,3 +5893,337 @@ fn test_list_plugins_names_the_terraform_plugin() {
         "--list-plugins should name the built-in terraform plugin"
     );
 }
+
+// ==================== Auto Detection Tests ====================
+
+#[test]
+fn test_auto_flag_renders_every_line_of_a_mixed_log_from_stdin() {
+    let contents = example_contents("auto_mixed.log");
+    let output = run_splash_with_stdin_args(&["--auto", "--output", "plain"], &contents).unwrap();
+
+    let expected: Vec<&str> = contents.lines().filter(|line| !line.is_empty()).collect();
+
+    assert_eq!(output.lines().collect::<Vec<&str>>(), expected);
+}
+
+#[test]
+fn test_auto_mode_colors_postfix_queue_ids_in_a_mixed_log() {
+    let contents = example_contents("auto_mixed.log");
+    let output =
+        run_splash_with_stdin_args(&["--mode", "auto", "--output", "json"], &contents).unwrap();
+
+    assert!(
+        output.contains(r#"{"kind":"queue_id","text":"4F2A1C0123"}"#),
+        "auto mode should render the postfix lines with the postfix plugin: {}",
+        output
+    );
+}
+
+#[test]
+fn test_auto_mode_renders_a_short_stdin_stream() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "plain"],
+        "maintenance window moves to 02:00\n",
+    )
+    .unwrap();
+
+    assert_eq!(output, "maintenance window moves to 02:00\n");
+}
+
+#[test]
+fn test_auto_mode_streams_stdin_past_the_detection_sample() {
+    let line =
+        "127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] \"GET /apache_pb.gif HTTP/1.0\" 200 2326\n";
+    let input = line.repeat(120);
+    let output = run_splash_with_stdin_args(&["--auto", "--output", "plain"], &input).unwrap();
+
+    assert_eq!(output, input);
+}
+
+#[test]
+fn test_auto_flag_renders_a_log_file() {
+    let example = example_path("auto_mixed.log");
+    let output = run_splash_file_args(&[
+        "--auto",
+        "--output",
+        "plain",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output.lines().count(), 5);
+}
+
+#[test]
+fn test_auto_flag_cannot_be_combined_with_a_mode() {
+    let output = run_splash(&["--auto", "--mode", "syslog"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+}
+
+#[test]
+fn test_a_config_file_can_turn_on_auto_detection() {
+    let home = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(home.path().join(".splash")).unwrap();
+    std::fs::write(
+        home.path().join(".splash/config.toml"),
+        "mode = \"auto\"\noutput = \"json\"\n",
+    )
+    .unwrap();
+
+    let output =
+        run_splash_with_home(home.path(), &[], &example_contents("auto_mixed.log")).unwrap();
+
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains(r#"{"kind":"queue_id","text":"4F2A1C0123"}"#));
+}
+
+// ==================== Filtering Tests ====================
+
+/// Runs splash in auto mode over the filter example with extra arguments,
+/// collecting plain output
+fn filter_example(args: &[&str]) -> String {
+    let mut all = vec!["--auto", "--output", "plain"];
+    all.extend_from_slice(args);
+
+    run_splash_with_stdin_args(&all, &example_contents("filter_app.log")).unwrap()
+}
+
+#[test]
+fn test_level_filter_keeps_an_error_entry_and_its_stack_trace() {
+    let output = filter_example(&["--level", "ERROR"]);
+
+    assert_eq!(output.lines().count(), 3);
+    assert!(output.contains("uncaught exception"));
+    assert!(output.contains("NodeEnvironment.java:298"));
+}
+
+#[test]
+fn test_level_filter_reads_a_comma_separated_list() {
+    let output = filter_example(&["--level", "warn,error"]);
+
+    assert_eq!(output.lines().count(), 4);
+    assert!(!output.contains("starting"));
+}
+
+#[test]
+fn test_since_and_until_keep_the_entries_written_between_them() {
+    let output = filter_example(&[
+        "--since",
+        "2023-10-03 12:00:03",
+        "--until",
+        "2023-10-03 12:00:04",
+    ]);
+
+    assert_eq!(output.lines().count(), 4);
+    assert!(output.contains("high disk watermark"));
+    assert!(!output.contains("stopping"));
+}
+
+#[test]
+fn test_since_reads_an_age() {
+    let output = filter_example(&["--since", "2h ago"]);
+
+    assert_eq!(output, "");
+}
+
+#[test]
+fn test_grep_keeps_only_matching_lines() {
+    let output = filter_example(&["--grep", "node locks"]);
+
+    assert_eq!(
+        output,
+        "java.lang.IllegalStateException: failed to obtain node locks\n"
+    );
+}
+
+#[test]
+fn test_grep_highlights_capture_groups() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "json", "--grep", r"thread \[(\w+)\]"],
+        &example_contents("filter_app.log"),
+    )
+    .unwrap();
+
+    assert!(output.contains(r#"{"kind":"capture","text":"main"}"#));
+    assert!(output.contains(r#"{"kind":"match","text":"thread "}"#));
+}
+
+#[test]
+fn test_exclude_drops_matching_lines() {
+    let output = filter_example(&["--exclude", "INFO", "--exclude", "^at "]);
+
+    assert_eq!(output.lines().count(), 3);
+    assert!(!output.contains("starting"));
+}
+
+#[test]
+fn test_field_filter_keeps_lines_holding_the_field() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "clf",
+            "--output",
+            "plain",
+            "--filter",
+            "ip=10.0.0.50",
+        ],
+        &example_contents("clf_multiple.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        "10.0.0.50 - bob [15/Jan/2024:10:31:12 +0000] \"POST /api/login HTTP/1.1\" 200 512\n"
+    );
+}
+
+#[test]
+fn test_filters_apply_to_a_log_file() {
+    let example = example_path("filter_app.log");
+    let output = run_splash_file_args(&[
+        "--auto",
+        "--output",
+        "plain",
+        "--level",
+        "error",
+        "--path",
+        example.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn test_an_invalid_filter_is_reported() {
+    for args in [
+        ["--level", "loud"],
+        ["--since", "soon"],
+        ["--grep", "("],
+        ["--filter", "colour=red"],
+    ] {
+        let output = run_splash(&args).unwrap();
+
+        assert!(!output.status.success(), "{:?} should fail", args);
+        assert!(
+            String::from_utf8_lossy(&output.stderr).starts_with("Error: "),
+            "{:?}",
+            args
+        );
+    }
+}
+
+// ==================== Timestamp Tests ====================
+
+#[test]
+fn test_convert_date_rewrites_epoch_timestamps() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--auto",
+            "--output",
+            "plain",
+            "--convert-date",
+            "--tz",
+            "UTC",
+        ],
+        &example_contents("dates_mixed.log"),
+    )
+    .unwrap();
+
+    assert!(output.starts_with("2021-03-03T00:00:00.123Z    123 10.0.0.5"));
+}
+
+#[test]
+fn test_tz_rewrites_every_timestamp_in_that_zone() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "plain", "--tz", "UTC"],
+        &example_contents("dates_mixed.log"),
+    )
+    .unwrap();
+
+    assert!(output.contains("frank [2000-10-10T20:55:36Z] \"GET"));
+}
+
+#[test]
+fn test_normalize_dates_rewrites_every_timestamp() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "plain", "--normalize-dates"],
+        &example_contents("dates_mixed.log"),
+    )
+    .unwrap();
+
+    assert!(!output.contains("10/Oct/2000"));
+    assert!(!output.contains("1614729600.123"));
+}
+
+#[test]
+fn test_relative_rewrites_every_timestamp_as_an_age() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "plain", "--relative"],
+        &example_contents("dates_mixed.log"),
+    )
+    .unwrap();
+
+    assert!(output.lines().all(|line| line.contains("years ago")));
+}
+
+#[test]
+fn test_an_unknown_time_zone_is_reported() {
+    let output = run_splash(&["--tz", "Mars/Base"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown time zone 'Mars/Base'"));
+}
+
+// ==================== Keyword Tests ====================
+
+#[test]
+fn test_keywords_are_styled_in_ad_hoc_text() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "json"],
+        &example_contents("keywords.log"),
+    )
+    .unwrap();
+
+    for expected in [
+        r#"{"kind":"failure","text":"ERROR"}"#,
+        r#"{"kind":"protocol","text":"tcp"}"#,
+        r#"{"kind":"success","text":"OK"}"#,
+        r#"{"kind":"keyword","text":"restart"}"#,
+    ] {
+        assert!(output.contains(expected), "missing {}", expected);
+    }
+}
+
+#[test]
+fn test_no_wordcolor_leaves_keywords_unstyled() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "json", "--no-wordcolor"],
+        &example_contents("keywords.log"),
+    )
+    .unwrap();
+
+    assert!(!output.contains(r#""kind":"failure""#));
+}
+
+#[test]
+fn test_a_config_file_adds_keywords_and_patterns() {
+    let home = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(home.path().join(".splash")).unwrap();
+    std::fs::write(
+        home.path().join(".splash/config.toml"),
+        "output = \"json\"\n\n[keywords]\nfailure = \"timed out\"\n\n[patterns]\ntransaction = \"req-[0-9a-f]{8}\"\n",
+    )
+    .unwrap();
+
+    let output = run_splash_with_home(home.path(), &[], &example_contents("keywords.log")).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains(
+        r#"{"kind":"failure","text":"timed"},{"kind":"failure","text":" "},{"kind":"failure","text":"out"}"#
+    ));
+    assert!(stdout.contains(r#"{"kind":"transaction","text":"req-4f2a1c01"}"#));
+}

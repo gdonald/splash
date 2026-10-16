@@ -1,0 +1,6 @@
+Oct  3 12:00:01 mail postfix/smtpd[1234]: connect from unknown[10.0.0.5]
+Oct  3 12:00:01 mail postfix/smtpd[1234]: 4F2A1C0123: client=unknown[10.0.0.5]
+Oct  3 12:00:01 mail postfix/cleanup[1235]: 4F2A1C0123: message-id=<20231003120001.4F2A1C0123@example.com>
+Oct  3 12:00:02 mail sshd[4101]: Accepted publickey for alice from 10.0.0.5 port 52144 ssh2
+
+maintenance window moves to 02:00

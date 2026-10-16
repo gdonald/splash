@@ -81,6 +81,9 @@ splash --mode ci --path build.log
 splash --mode cloud-init --path /var/log/cloud-init.log
 terraform apply 2>&1 | splash --mode terraform
 
+# Detect the log format from the first lines
+splash --auto --path /var/log/mail.log
+
 # Colorize with ad-hoc mode (auto-detects patterns)
 splash --mode ad-hoc --path /var/log/syslog
 
@@ -106,7 +109,8 @@ Options:
                                          nginx-error, oops, php, postfix, postgresql, procmail,
                                          proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super,
                                          syslog, systemd-resolved, terraform, ulogd, varnish, vsftpd,
-                                         xferlog, ad-hoc)
+                                         xferlog, ad-hoc, auto)
+      --auto                             Detect the log format from the first lines of the input
   -p, --path <PATH>                      Path to the log file
   -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain)
   -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
@@ -122,9 +126,165 @@ Options:
       --list-plugins                     List all available plugins
       --plugin <PLUGIN>                  Use a specific plugin by name
       --disable-plugin <DISABLE_PLUGIN>  Disable a specific plugin by name
+      --level <LEVELS>                   Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
+      --since <TIME>                     Keep only lines written at or after this time, such as 2h
+                                         ago or 2024-01-01
+      --until <TIME>                     Keep only lines written at or before this time
+      --grep <PATTERN>                   Keep only lines matching this pattern, and highlight the
+                                         match (repeatable)
+      --exclude <PATTERN>                Drop lines matching this pattern (repeatable)
+      --filter <KEY=VALUE>               Keep only lines holding a field with this value, as
+                                         KEY=VALUE (repeatable)
+      --convert-date                     Rewrite timestamps written as seconds since the epoch as
+                                         dates
+      --normalize-dates                  Rewrite every timestamp as RFC 3339
+      --tz <ZONE>                        Rewrite every timestamp in this zone, such as UTC or
+                                         America/New_York
+      --relative                         Rewrite every timestamp as its distance from now, such as
+                                         2 hours ago
+      --no-wordcolor                     Leave keywords such as ERROR, TCP, and SELECT in the style
+                                         around them
   -h, --help                             Print help
   -V, --version                          Print version
 ```
+
+---
+
+## Filtering
+
+Filters apply to every output format and combine: a line is shown only when it passes all of
+them.
+
+```bash
+# Errors and warnings only
+splash --auto --level error,warn --path /var/log/app.log
+
+# The last two hours
+journalctl | splash --mode journalctl --since "2h ago"
+
+# A window between two times
+splash --mode syslog --since "2024-01-01 09:00" --until "2024-01-01 10:00" --path /var/log/syslog
+
+# Lines mentioning a user, with the user name highlighted
+splash --mode auth --grep 'for (\w+) from' --path /var/log/auth.log
+
+# Everything but health checks
+splash --mode httpd --exclude /healthz --path /var/log/nginx/access.log
+
+# One client's requests that failed
+splash --mode httpd --filter ip=10.0.0.5 --filter status=500 --path /var/log/nginx/access.log
+```
+
+### Levels
+
+`--level` takes a comma-separated list and can be repeated. The levels are `trace`, `debug`,
+`info`, `notice`, `warn` (or `warning`), `error` (or `err`), and `critical`, which also covers
+`crit`, `fatal`, `alert`, `emerg`, and `panic`. Names are case-insensitive, and a level matches
+only itself, so `--level error` does not include `critical`.
+
+A line's level is its first level field, such as `[ERROR]`, PostgreSQL's `LOG`, MongoDB's `I`, or
+Redis's `#`. A line with no level field takes the first word in it that names a level.
+
+### Times
+
+`--since` and `--until` take a timestamp in any form splash reads in logs, a date such as
+`2024-01-01`, which means midnight at the start of it, `today`, `yesterday`, `now`, or an age such
+as `90s ago`, `30 minutes ago`, `2h ago`, `3 days ago`, or `1w ago`. Both ends are inclusive.
+
+Log timestamps are read in these forms: RFC 3339 and ISO 8601 (`2023-10-03T12:00:01.123Z`, with a
+space instead of `T`, a comma before the fraction, or `/` between the date parts), the Common Log
+Format's `10/Oct/2000:13:55:36 -0700`, `03-Oct-2023 12:00:01 UTC`, `03 Oct 2023 12:00:00.001`,
+syslog's `Oct  3 12:00:01`, `ctime`'s `Tue Oct  3 12:00:01 2023`, klog's `1003 12:00:01.123456`,
+and seconds or milliseconds since the epoch. A timestamp with no zone is read in the local zone,
+which comes from `TZ` or `/etc/localtime`. A timestamp with no year is placed in the latest year
+that does not put it more than a day in the future.
+
+### Entries
+
+`--level`, `--since`, and `--until` judge whole entries. A line with no timestamp and no level,
+such as a stack trace line, belongs to the entry above it and is kept or dropped with that entry.
+A line with a timestamp but no level is its own entry, and `--level` drops it.
+
+### Patterns and fields
+
+`--grep` and `--exclude` take regular expressions and can be repeated. A line is kept when it
+matches any `--grep` pattern and no `--exclude` pattern. Each `--grep` match is shown in the
+`match` color and the text of each capture group in the `capture` color, which `--color
+match=COLOR` and `--color capture=COLOR` change (see [Color overrides](#color-overrides)).
+
+`--filter KEY=VALUE` keeps lines holding a field of that kind with exactly that value. The key is a
+color key, such as `status`, `host`, `userid`, or `method`. `ip` matches both an IP address and an
+access log's client address. Repeated `--filter` options must all match.
+
+---
+
+## Timestamps
+
+splash can rewrite the timestamps it reads, in every output format.
+
+```bash
+# Squid writes seconds since the epoch
+splash --mode squid --convert-date --path /var/log/squid/access.log
+
+# Every timestamp in UTC
+splash --auto --tz UTC --path /var/log/app.log
+
+# Every timestamp in one format, in the local zone
+splash --auto --normalize-dates --path /var/log/app.log
+
+# How long ago each line was written
+splash --mode syslog --relative --path /var/log/syslog
+```
+
+`--convert-date` rewrites only timestamps written as seconds or milliseconds since the epoch.
+`--normalize-dates` rewrites every timestamp splash reads (see [Times](#times) for the forms).
+Both write RFC 3339 with the zone offset, such as `2023-10-03T07:00:01.123-05:00`, keeping the
+fraction of a second the log wrote.
+
+`--tz ZONE` rewrites every timestamp in that zone instead of the local one. The zone is `UTC`, a
+name installed under `/usr/share/zoneinfo` such as `America/New_York`, or a POSIX `TZ` rule such
+as `EST5EDT,M3.2.0,M11.1.0`. `--relative` rewrites every timestamp as its distance from now in its
+largest whole unit, such as `45 seconds ago`, `2 hours ago`, or `in 5 minutes`.
+
+Brackets and quotes around a timestamp are kept. A timestamp written as a JSON number, such as
+Caddy's `ts`, is rewritten without quotes. Filters read the timestamps as the log wrote them, and
+`--grep` highlights the rewritten text.
+
+---
+
+## Keywords
+
+splash styles common keywords wherever they appear in text a mode leaves plain or treats as a
+message, so ad-hoc output and the message part of a parsed line both show them. Keywords match
+whole words in any case: `ERROR`, `error`, and `Error` are all styled, and `TCP_MISS` and `errors`
+are not.
+
+| Keywords | Color key |
+|----------|-----------|
+| `error`, `critical`, `fatal`, `failure`, `failed` | `failure` |
+| `warn`, `warning` | `warning` |
+| `info`, `debug` | `level` |
+| `tcp`, `udp`, `http`, `https`, `ssl`, `tls` | `protocol` |
+| `success`, `ok` | `success` |
+| `start`, `stop`, `restart`, `reload` | `keyword` |
+| `select`, `insert`, `update`, `delete`, `commit`, `rollback` | `method` |
+
+A config file adds keywords under `[keywords]` and regular expressions under `[patterns]`, keyed
+by the color key they are styled with. A `[keywords]` value is a comma-separated list, and a
+keyword can hold spaces. A configured keyword replaces the style of a built-in one with the same
+text, and a pattern match wins over a keyword it overlaps. Use `(?i)` in a pattern to match it in
+any case.
+
+```toml
+[keywords]
+failure = "timed out, refused"
+success = "deployed"
+
+[patterns]
+transaction = "req-[0-9a-f]{8}"
+```
+
+`--no-wordcolor`, or `wordcolor = false` in the config file, turns keyword styling off.
 
 ---
 
@@ -149,6 +309,15 @@ status = "white bold"
 [plugins.syslog]
 enabled = "true"
 facility = "cyan"
+
+# Keyword styling (see Keywords)
+wordcolor = true
+
+[keywords]
+failure = "timed out, refused"
+
+[patterns]
+transaction = "req-[0-9a-f]{8}"
 ```
 
 Command line options win over the config file. Colors are layered: the theme or profile first,
@@ -170,9 +339,10 @@ splash --mode clf --path access.log --theme solarized
 HTML class names: `plain`, `punctuation`, `ip`, `number`, `datetime`, `tz_offset`, `http_verb`,
 `http_version`, `client`, `user_identifier`, `userid`, `timestamp`, `method`, `request`,
 `protocol`, `status`, `size`, `referer`, `user_agent`, `vhost`, `duration`, `level`,
-`module`, `pid`, `message`, `cache_hit`, `cache_miss`, `cache_result`, `hierarchy`, and
+`module`, `pid`, `message`, `cache_hit`, `cache_miss`, `cache_result`, `hierarchy`,
 `content_type`, `transaction`, `tag`, `header`, `host`, `frontend`, `backend`, `server`,
-`timers`, `termination`, and `counters`.
+`timers`, `termination`, `counters`, `email`, `queue_id`, `path`, `success`, `warning`,
+`failure`, `match`, `capture`, and `keyword`.
 
 A color is one of the sixteen ANSI color names (`red`, `bright cyan`, `gray`), a hex value
 (`#ff5555`), or either of those followed by `bold`.
@@ -202,6 +372,29 @@ A `[plugins.NAME]` table holds settings for one plugin. `enabled = "false"` turn
 ---
 
 ## Modes
+
+### Auto detection
+
+`--auto`, or `--mode auto`, reads the first 50 lines of the input, scores every mode against
+them, and renders the input with the best scoring mode.
+
+```bash
+splash --auto --path /var/log/mail.log
+journalctl -f | splash --auto
+```
+
+Each mode's confidence is the share of the sample lines it reads as its own format. Modes are
+ranked by the lines they read, then by the fields they pick out of those lines, so `nginx-error`
+wins over `httpd` on an nginx error log. `syslog`, `journalctl`, and `auth` read any line behind a
+syslog header, so one of them is chosen only when no program's own mode, such as `postfix` or
+`ssh`, reads at least half of the sample.
+
+The input can mix formats. A line the chosen mode does not read is detected on its own, and a line
+no mode reads is rendered in ad-hoc mode. When no mode reads half of the sample, every line is
+detected on its own.
+
+Reading from stdin, splash holds the first 50 lines, or all of the input when it is shorter, before
+it prints anything. `mode = "auto"` in the config file turns detection on by default.
 
 ### Common Log Format (CLF)
 

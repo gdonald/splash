@@ -6,11 +6,16 @@ use crossterm::terminal::{
 use crossterm::{cursor, execute, terminal};
 use notify::{Config as WatchConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use splash::config::{Config, Options, Profiles, Settings};
+use splash::dates::DateOptions;
+use splash::detect;
 use splash::discovery::PluginDiscovery;
+use splash::filter::{Entry, FilterOptions};
 use splash::registry::PluginRegistry;
 use splash::source::LogFile;
 use splash::tui;
-use splash::{plugin_summary, profile_summary, render_contents, render_file, theme_summary};
+use splash::{
+    plugin_summary, profile_summary, render_contents_settings, resolve_file_settings, theme_summary,
+};
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -24,9 +29,13 @@ struct Args {
     /// docker, dovecot, elasticsearch, exim, fetchmail, ftpstats, git, haproxy, httpd, icecast,
     /// journalctl, kubernetes, mongodb, mysql, nginx-error, oops, php, postfix, postgresql, procmail,
     /// proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super, syslog, systemd-resolved,
-    /// terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc)
+    /// terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
     #[arg(short, long)]
     mode: Option<String>,
+
+    /// Detect the log format from the first lines of the input
+    #[arg(long, conflicts_with = "mode")]
+    auto: bool,
 
     /// Path to the log file
     #[arg(short, long)]
@@ -79,6 +88,50 @@ struct Args {
     /// Disable a specific plugin by name
     #[arg(long)]
     disable_plugin: Option<String>,
+
+    /// Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
+    #[arg(long, value_name = "LEVELS")]
+    level: Vec<String>,
+
+    /// Keep only lines written at or after this time, such as 2h ago or 2024-01-01
+    #[arg(long, value_name = "TIME")]
+    since: Option<String>,
+
+    /// Keep only lines written at or before this time
+    #[arg(long, value_name = "TIME")]
+    until: Option<String>,
+
+    /// Keep only lines matching this pattern, and highlight the match (repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    grep: Vec<String>,
+
+    /// Drop lines matching this pattern (repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    exclude: Vec<String>,
+
+    /// Keep only lines holding a field with this value, as KEY=VALUE (repeatable)
+    #[arg(long, value_name = "KEY=VALUE")]
+    filter: Vec<String>,
+
+    /// Rewrite timestamps written as seconds since the epoch as dates
+    #[arg(long)]
+    convert_date: bool,
+
+    /// Rewrite every timestamp as RFC 3339
+    #[arg(long)]
+    normalize_dates: bool,
+
+    /// Rewrite every timestamp in this zone, such as UTC or America/New_York
+    #[arg(long, value_name = "ZONE")]
+    tz: Option<String>,
+
+    /// Rewrite every timestamp as its distance from now, such as 2 hours ago
+    #[arg(long)]
+    relative: bool,
+
+    /// Leave keywords such as ERROR, TCP, and SELECT in the style around them
+    #[arg(long)]
+    no_wordcolor: bool,
 }
 
 fn main() {
@@ -113,13 +166,34 @@ fn main() {
         return;
     }
 
+    let mode = if args.auto {
+        Some(detect::AUTO.to_string())
+    } else {
+        args.mode
+    };
+
     let options = Options {
-        mode: args.mode,
+        mode,
         output: args.output,
         theme: args.theme,
         profile: args.profile,
         colors: args.color,
         jobs: args.jobs,
+        filter: FilterOptions {
+            levels: args.level,
+            since: args.since,
+            until: args.until,
+            grep: args.grep,
+            exclude: args.exclude,
+            fields: args.filter,
+        },
+        dates: DateOptions {
+            convert_epoch: args.convert_date,
+            normalize: args.normalize_dates,
+            tz: args.tz,
+            relative: args.relative,
+        },
+        no_wordcolor: args.no_wordcolor,
     };
 
     let settings = match Settings::resolve(&options, &config, &profiles) {
@@ -174,11 +248,23 @@ fn run(path: Option<&str>, settings: &Settings) {
                 print!("{}", header);
             }
 
-            for line in std::io::stdin().lines() {
+            let mut lines = io::stdin().lines().map(|line| line.unwrap());
+            let mut settings = settings.clone();
+            let mut entry = Entry::default();
+
+            if mode == detect::AUTO {
+                let sample: Vec<String> = lines.by_ref().take(detect::SAMPLE_SIZE).collect();
+                let sample = sample.join("\n");
+
+                settings.mode = detect::resolve_mode(mode, &sample);
                 print!(
                     "{}",
-                    render_contents(&line.unwrap(), mode, output_mode, theme)
+                    render_contents_settings(&sample, &settings, &mut entry)
                 );
+            }
+
+            for line in lines {
+                print!("{}", render_contents_settings(&line, &settings, &mut entry));
             }
 
             if let Some(footer) = output_mode.footer() {
@@ -201,7 +287,8 @@ fn fail(message: &str) -> ! {
 }
 
 fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
-    let mode = settings.mode.as_str();
+    let settings = &resolve_file_settings(path.as_ref(), settings)?;
+
     let output_mode = settings.output_mode;
     let theme = &settings.theme;
 
@@ -219,8 +306,12 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
         print!("{}", header);
     }
 
-    let rendered = render_file(path.as_ref(), settings).unwrap();
-    print!("{}", rendered);
+    let mut entry = Entry::default();
+    let log = LogFile::open(path.as_ref())?;
+    print!(
+        "{}",
+        render_contents_settings(log.text(), settings, &mut entry)
+    );
     let mut pos = fs::metadata(&path)?.len();
     let mut contents = String::new();
 
@@ -235,7 +326,10 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
                 contents.clear();
                 f.read_to_string(&mut contents).unwrap();
 
-                print!("{}", render_contents(&contents, mode, output_mode, theme));
+                print!(
+                    "{}",
+                    render_contents_settings(&contents, settings, &mut entry)
+                );
             }
             Err(e) => fail(&format!("{:?}", e)),
         }
@@ -258,13 +352,7 @@ fn view(path: Option<&str>, settings: &Settings) -> io::Result<()> {
     };
 
     let (_, rows) = terminal::size()?;
-    let mut viewer = tui::viewer_for(
-        log.text(),
-        &settings.mode,
-        settings.output_mode,
-        &settings.theme,
-        rows,
-    );
+    let mut viewer = tui::viewer_for(log.text(), settings, rows);
     let mut out = io::stdout();
 
     enable_raw_mode()?;

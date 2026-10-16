@@ -4,6 +4,7 @@
 /// same sequence differently: ANSI escapes for terminals, HTML for a browser,
 /// JSON for other programs, and plain text for scripting.
 use crate::theme::Theme;
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
@@ -56,6 +57,9 @@ pub enum TokenKind {
     Success,
     Warning,
     Failure,
+    Match,
+    Capture,
+    Keyword,
 }
 
 impl TokenKind {
@@ -108,11 +112,14 @@ impl TokenKind {
             TokenKind::Success => "success",
             TokenKind::Warning => "warning",
             TokenKind::Failure => "failure",
+            TokenKind::Match => "match",
+            TokenKind::Capture => "capture",
+            TokenKind::Keyword => "keyword",
         }
     }
 
     /// The number of distinct token styles
-    pub const COUNT: usize = 46;
+    pub const COUNT: usize = 49;
 
     /// Position of this style in `all()`, used to index a theme
     pub fn index(&self) -> usize {
@@ -178,6 +185,9 @@ impl TokenKind {
             TokenKind::Success,
             TokenKind::Warning,
             TokenKind::Failure,
+            TokenKind::Match,
+            TokenKind::Capture,
+            TokenKind::Keyword,
         ]
     }
 }
@@ -185,13 +195,38 @@ impl TokenKind {
 /// A run of text with one style, borrowed from the line it was parsed from
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token<'a> {
-    pub text: &'a str,
+    pub text: Cow<'a, str>,
     pub kind: TokenKind,
 }
 
 impl<'a> Token<'a> {
     pub fn new(text: &'a str, kind: TokenKind) -> Self {
-        Self { text, kind }
+        Self {
+            text: Cow::Borrowed(text),
+            kind,
+        }
+    }
+
+    /// A token holding text that is not in the line, such as a rewritten
+    /// timestamp
+    pub fn owned(text: String, kind: TokenKind) -> Self {
+        Self {
+            text: Cow::Owned(text),
+            kind,
+        }
+    }
+
+    /// The token's text between two byte offsets, in the same style
+    pub fn slice(&self, start: usize, end: usize) -> Token<'a> {
+        let text = match &self.text {
+            Cow::Borrowed(text) => Cow::Borrowed(&text[start..end]),
+            Cow::Owned(text) => Cow::Owned(text[start..end].to_string()),
+        };
+
+        Token {
+            text,
+            kind: self.kind,
+        }
     }
 }
 
@@ -208,7 +243,10 @@ impl<'a> ParsedLine<'a> {
 
     /// The line text with all styling removed
     pub fn text(&self) -> String {
-        self.tokens.iter().map(|token| token.text).collect()
+        self.tokens
+            .iter()
+            .map(|token| token.text.as_ref())
+            .collect()
     }
 }
 
@@ -304,7 +342,7 @@ impl OutputMode {
 fn render_ansi(line: &ParsedLine<'_>, theme: &Theme) -> String {
     line.tokens
         .iter()
-        .map(|token| theme.colorize(token.kind, token.text))
+        .map(|token| theme.colorize(token.kind, &token.text))
         .collect()
 }
 
@@ -315,7 +353,7 @@ fn render_html(line: &ParsedLine<'_>) -> String {
             format!(
                 "<span class=\"splash-{}\">{}</span>",
                 token.kind.name(),
-                escape_html(token.text)
+                escape_html(&token.text)
             )
         })
         .collect()
@@ -329,7 +367,7 @@ fn render_json(line: &ParsedLine<'_>) -> String {
             format!(
                 "{{\"kind\":\"{}\",\"text\":\"{}\"}}",
                 token.kind.name(),
-                escape_json(token.text)
+                escape_json(&token.text)
             )
         })
         .collect();

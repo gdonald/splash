@@ -122,16 +122,15 @@ impl Plugin for CiPlugin {
         ParseResult::Parsed(parse_line(line))
     }
 
-    /// Every line parses, so confidence comes from the lines that carry a
-    /// CI marker instead.
+    /// Every line parses, and a build's own output sits between the lines
+    /// that carry a CI marker, so a sample holding any marked line is a CI
+    /// log.
     fn detect_format(&self, sample_lines: &[&str]) -> f32 {
-        if sample_lines.is_empty() {
-            return 0.0;
+        if sample_lines.iter().any(|line| is_marked(line)) {
+            1.0
+        } else {
+            0.0
         }
-
-        let marked = sample_lines.iter().filter(|line| is_marked(line)).count();
-
-        marked as f32 / sample_lines.len() as f32
     }
 }
 

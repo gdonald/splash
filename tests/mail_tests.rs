@@ -28,7 +28,10 @@ fn field(text: &str, kind: TokenKind) -> String {
 
 /// The text the scanner kept, joined back together
 fn joined(text: &str) -> String {
-    fields(text).iter().map(|token| token.text).collect()
+    fields(text)
+        .iter()
+        .map(|token| token.text.as_ref())
+        .collect()
 }
 
 #[test]

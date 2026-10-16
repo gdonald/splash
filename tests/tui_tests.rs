@@ -1,6 +1,8 @@
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
+use splash::config::Settings;
+use splash::filter::Filter;
 use splash::output::OutputMode;
 use splash::theme::Theme;
 use splash::tui::{draw, key_for, run_loop, viewer_for, NEEDS_TERMINAL};
@@ -37,6 +39,18 @@ fn numbered_viewer(count: usize, height: usize) -> Viewer {
     )
 }
 
+fn plain_settings() -> Settings {
+    Settings {
+        mode: "ad-hoc".to_string(),
+        output_mode: OutputMode::Plain,
+        theme: Theme::default(),
+        jobs: 1,
+        filter: Filter::default(),
+        dates: Default::default(),
+        keywords: Default::default(),
+    }
+}
+
 fn rendered(viewer: &Viewer) -> String {
     let mut buffer: Vec<u8> = Vec::new();
     draw(&mut buffer, viewer).unwrap();
@@ -54,13 +68,7 @@ fn the_terminal_requirement_names_the_other_output_modes() {
 
 #[test]
 fn a_viewer_reserves_the_bottom_row_for_the_status_line() {
-    let viewer = viewer_for(
-        "a\nb\nc\nd\n",
-        "ad-hoc",
-        OutputMode::Plain,
-        &Theme::default(),
-        3,
-    );
+    let viewer = viewer_for("a\nb\nc\nd\n", &plain_settings(), 3);
 
     assert_eq!(viewer.height(), 2);
     assert_eq!(viewer.visible(), ["a", "b"]);
@@ -68,7 +76,7 @@ fn a_viewer_reserves_the_bottom_row_for_the_status_line() {
 
 #[test]
 fn a_viewer_on_a_terminal_with_no_rows_still_shows_one_line() {
-    let viewer = viewer_for("a\nb\n", "ad-hoc", OutputMode::Plain, &Theme::default(), 0);
+    let viewer = viewer_for("a\nb\n", &plain_settings(), 0);
 
     assert_eq!(viewer.height(), 1);
 }

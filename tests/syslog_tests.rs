@@ -45,8 +45,10 @@ fn field(line: &str, kind: TokenKind) -> String {
 }
 
 /// The text of the timestamp a header was split into
-fn header_timestamp(line: &str) -> &str {
-    syslog::split_header(line).unwrap().tokens[0].text
+fn header_timestamp(line: &str) -> String {
+    syslog::split_header(line).unwrap().tokens[0]
+        .text
+        .to_string()
 }
 
 #[test]
@@ -70,7 +72,7 @@ fn a_syslog_header_colors_the_timestamp_host_program_and_process_id() {
         .tokens
         .iter()
         .filter(|token| token.kind != TokenKind::Plain && token.kind != TokenKind::Punctuation)
-        .map(|token| (token.text, token.kind))
+        .map(|token| (token.text.as_ref(), token.kind))
         .collect();
 
     assert_eq!(

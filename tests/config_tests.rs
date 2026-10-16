@@ -707,3 +707,141 @@ fn an_output_error_reaches_the_config_error_unchanged() {
         UnknownOutputMode("braille".to_string()).to_string()
     );
 }
+
+#[test]
+fn an_invalid_filter_is_reported_when_settings_are_resolved() {
+    let options = Options {
+        filter: splash::filter::FilterOptions {
+            levels: vec!["loud".to_string()],
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+
+    let error = Settings::resolve(
+        &options,
+        &Config::default(),
+        &Profiles::new(PathBuf::from("unused")),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::Filter(splash::filter::FilterError::UnknownLevel(
+            "loud".to_string()
+        ))
+    );
+    assert_eq!(
+        error.to_string(),
+        "Unknown log level 'loud' (expected trace, debug, info, notice, warn, error, or critical)"
+    );
+}
+
+#[test]
+fn an_unknown_time_zone_is_reported_when_settings_are_resolved() {
+    let options = Options {
+        dates: splash::dates::DateOptions {
+            tz: Some("Mars/Base".to_string()),
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+
+    let error = Settings::resolve(
+        &options,
+        &Config::default(),
+        &Profiles::new(PathBuf::from("unused")),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::Zone(splash::dates::UnknownZone("Mars/Base".to_string()))
+    );
+    assert_eq!(
+        error.to_string(),
+        "Unknown time zone 'Mars/Base' (expected UTC, a name such as America/New_York, or a POSIX TZ rule)"
+    );
+}
+
+fn resolve_with(config_text: &str, options: Options) -> Result<Settings, ConfigError> {
+    Settings::resolve(
+        &options,
+        &Config::parse(config_text, "test.toml").unwrap(),
+        &Profiles::new(PathBuf::from("unused")),
+    )
+}
+
+#[test]
+fn a_config_file_lists_keywords_and_patterns_by_color_key() {
+    let config = Config::parse(
+        "wordcolor = true\n[keywords]\nfailure = \"timed out\"\n[patterns]\ntransaction = \"req-[0-9a-f]+\"\n",
+        "test.toml",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (config.wordcolor, config.keywords, config.patterns),
+        (
+            Some("true".to_string()),
+            vec![("failure".to_string(), "timed out".to_string())],
+            vec![("transaction".to_string(), "req-[0-9a-f]+".to_string())]
+        )
+    );
+}
+
+#[test]
+fn settings_style_the_built_in_and_configured_keywords() {
+    let settings =
+        resolve_with("[keywords]\nsuccess = \"deployed\"\n", Options::default()).unwrap();
+
+    assert_eq!(
+        settings.keywords,
+        splash::keywords::Keywords::build(&[("success".to_string(), "deployed".to_string())], &[])
+            .unwrap()
+    );
+}
+
+#[test]
+fn wordcolor_false_in_a_config_file_turns_keyword_styling_off() {
+    let settings = resolve_with("wordcolor = false\n", Options::default()).unwrap();
+
+    assert_eq!(settings.keywords, splash::keywords::Keywords::none());
+}
+
+#[test]
+fn no_wordcolor_on_the_command_line_turns_keyword_styling_off() {
+    let options = Options {
+        no_wordcolor: true,
+        ..Options::default()
+    };
+
+    assert_eq!(
+        resolve_with("", options).unwrap().keywords,
+        splash::keywords::Keywords::none()
+    );
+}
+
+#[test]
+fn an_invalid_wordcolor_setting_is_reported() {
+    let error = resolve_with("wordcolor = sometimes\n", Options::default()).unwrap_err();
+
+    assert_eq!(error, ConfigError::BadWordcolor("sometimes".to_string()));
+    assert_eq!(
+        error.to_string(),
+        "Invalid wordcolor setting 'sometimes' (expected true or false)"
+    );
+}
+
+#[test]
+fn an_invalid_configured_keyword_is_reported_when_settings_are_resolved() {
+    let error = resolve_with("[keywords]\nloud = \"deploy\"\n", Options::default()).unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::Keyword(splash::keywords::KeywordError::UnknownKind(
+            "loud".to_string()
+        ))
+    );
+    assert_eq!(error.to_string(), "Unknown keyword color 'loud'");
+}

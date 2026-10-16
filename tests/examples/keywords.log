@@ -1,0 +1,4 @@
+ERROR: tcp connection to db01 failed after 3 attempts
+deploy finished OK, restart scheduled
+TCP_MISS errors are not keywords
+request req-4f2a1c01 timed out
