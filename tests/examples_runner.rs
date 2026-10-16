@@ -1,8 +1,17 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+/// How long a followed file may take to produce its first output, which is
+/// slow when the binary runs under a coverage tracer
+const FIRST_OUTPUT_DEADLINE: Duration = Duration::from_secs(60);
+
+/// A followed file has finished its initial render once its output has been
+/// idle this long
+const OUTPUT_QUIET_PERIOD: Duration = Duration::from_millis(500);
 
 /// Helper function to get the path to example log files
 fn example_path(filename: &str) -> PathBuf {
@@ -75,15 +84,36 @@ fn run_splash_file_args(args: &[&str]) -> Result<String, std::io::Error> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
         .args(args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()?;
 
-    thread::sleep(Duration::from_millis(500));
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut output = Vec::new();
+
+    if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+        output.extend(chunk);
+
+        while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+            output.extend(chunk);
+        }
+    }
 
     let _ = child.kill();
+    let _ = child.wait();
 
-    let output = child.wait_with_output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&output).to_string())
 }
 
 /// Helper function to run splash against a file, collecting output in a file
