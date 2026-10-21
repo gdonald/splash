@@ -12,15 +12,28 @@ use splash::discovery::PluginDiscovery;
 use splash::filter::{Entry, FilterOptions};
 use splash::registry::PluginRegistry;
 use splash::source::LogFile;
+use splash::stats::{self, Stats, StatsOptions};
+use splash::tail::Tail;
 use splash::tui;
 use splash::{
-    plugin_summary, profile_summary, render_contents_settings, resolve_file_settings, theme_summary,
+    closing, opening, plugin_summary, profile_summary, progress, render_contents_counted,
+    resolve_file_settings, theme_summary,
 };
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
+
+/// How often a followed file checks whether splash was interrupted
+const INTERRUPT_POLL: Duration = Duration::from_millis(100);
+
+/// How long the viewer waits for a key before checking the log for new lines
+const VIEWER_POLL: Duration = Duration::from_millis(250);
+
+/// Set when splash is asked to stop while following a file
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -132,6 +145,30 @@ struct Args {
     /// Leave keywords such as ERROR, TCP, and SELECT in the style around them
     #[arg(long)]
     no_wordcolor: bool,
+
+    /// Mark unknown users, and follow ports and addresses with their services, hosts, and locations
+    #[arg(long, conflicts_with = "no_lookups")]
+    lookups: bool,
+
+    /// Turn lookups off, even when the config file turns them on
+    #[arg(long)]
+    no_lookups: bool,
+
+    /// Write statistics on the kept lines in place of the lines
+    #[arg(long, conflicts_with = "histogram")]
+    stats: bool,
+
+    /// Write the line count, error count, and time range after the lines
+    #[arg(long)]
+    summary: bool,
+
+    /// Write the number of lines in each period, such as 5m or 1h, in place of the lines
+    #[arg(long, value_name = "PERIOD", num_args = 0..=1, default_missing_value = stats::DEFAULT_BUCKET)]
+    histogram: Option<String>,
+
+    /// Format of --stats, --summary, and --histogram (text, json, csv)
+    #[arg(long, value_name = "FORMAT")]
+    stats_format: Option<String>,
 }
 
 fn main() {
@@ -194,6 +231,17 @@ fn main() {
             relative: args.relative,
         },
         no_wordcolor: args.no_wordcolor,
+        lookups: match (args.lookups, args.no_lookups) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        },
+        stats: StatsOptions {
+            stats: args.stats,
+            summary: args.summary,
+            histogram: args.histogram,
+            format: args.stats_format,
+        },
     };
 
     let settings = match Settings::resolve(&options, &config, &profiles) {
@@ -227,7 +275,6 @@ fn main() {
 fn run(path: Option<&str>, settings: &Settings) {
     let mode = settings.mode.as_str();
     let output_mode = settings.output_mode;
-    let theme = &settings.theme;
 
     if output_mode.is_interactive() {
         if let Err(e) = view(path, settings) {
@@ -244,13 +291,12 @@ fn run(path: Option<&str>, settings: &Settings) {
             }
         }
         None => {
-            if let Some(header) = output_mode.header(theme) {
-                print!("{}", header);
-            }
+            print!("{}", opening(settings));
 
             let mut lines = io::stdin().lines().map(|line| line.unwrap());
             let mut settings = settings.clone();
             let mut entry = Entry::default();
+            let mut stats = Stats::default();
 
             if mode == detect::AUTO {
                 let sample: Vec<String> = lines.by_ref().take(detect::SAMPLE_SIZE).collect();
@@ -259,17 +305,19 @@ fn run(path: Option<&str>, settings: &Settings) {
                 settings.mode = detect::resolve_mode(mode, &sample);
                 print!(
                     "{}",
-                    render_contents_settings(&sample, &settings, &mut entry)
+                    render_contents_counted(&sample, &settings, &mut entry, &mut stats)
                 );
             }
 
             for line in lines {
-                print!("{}", render_contents_settings(&line, &settings, &mut entry));
+                print!(
+                    "{}",
+                    render_contents_counted(&line, &settings, &mut entry, &mut stats)
+                );
             }
 
-            if let Some(footer) = output_mode.footer() {
-                print!("{}", footer);
-            }
+            print!("{}", progress(&settings, &stats));
+            print!("{}", closing(&settings, &stats));
         }
     }
 }
@@ -289,8 +337,7 @@ fn fail(message: &str) -> ! {
 fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
     let settings = &resolve_file_settings(path.as_ref(), settings)?;
 
-    let output_mode = settings.output_mode;
-    let theme = &settings.theme;
+    catch_interrupts();
 
     let (tx, rx) = mpsc::channel();
 
@@ -302,21 +349,21 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
 
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
 
-    if let Some(header) = output_mode.header(theme) {
-        print!("{}", header);
-    }
+    print!("{}", opening(settings));
 
     let mut entry = Entry::default();
+    let mut stats = Stats::default();
     let log = LogFile::open(path.as_ref())?;
     print!(
         "{}",
-        render_contents_settings(log.text(), settings, &mut entry)
+        render_contents_counted(log.text(), settings, &mut entry, &mut stats)
     );
+    print!("{}", progress(settings, &stats));
     let mut pos = fs::metadata(&path)?.len();
     let mut contents = String::new();
 
     loop {
-        match rx.recv() {
+        match rx.recv_timeout(INTERRUPT_POLL) {
             Ok(_) => {
                 let mut f = File::open(&path).unwrap();
                 f.seek(SeekFrom::Start(pos)).unwrap();
@@ -326,15 +373,46 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
                 contents.clear();
                 f.read_to_string(&mut contents).unwrap();
 
+                if contents.is_empty() {
+                    continue;
+                }
+
                 print!(
                     "{}",
-                    render_contents_settings(&contents, settings, &mut entry)
+                    render_contents_counted(&contents, settings, &mut entry, &mut stats)
                 );
+                print!("{}", progress(settings, &stats));
             }
+            Err(RecvTimeoutError::Timeout) if INTERRUPTED.load(Ordering::SeqCst) => {
+                print!("{}", closing(settings, &stats));
+
+                return Ok(());
+            }
+            Err(RecvTimeoutError::Timeout) => {}
             Err(e) => fail(&format!("{:?}", e)),
         }
     }
 }
+
+#[cfg(unix)]
+extern "C" fn note_interrupt(_signal: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+/// Has Ctrl-C or `kill` end the follow loop, so splash writes what it
+/// writes when its input ends
+#[cfg(unix)]
+fn catch_interrupts() {
+    let handler: extern "C" fn(libc::c_int) = note_interrupt;
+
+    unsafe {
+        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn catch_interrupts() {}
 
 /// Reads the whole input and shows it in the scrollable viewer
 fn view(path: Option<&str>, settings: &Settings) -> io::Result<()> {
@@ -342,26 +420,49 @@ fn view(path: Option<&str>, settings: &Settings) -> io::Result<()> {
         return Err(io::Error::other(tui::NEEDS_TERMINAL));
     }
 
-    let log = match path {
-        Some(p) => LogFile::open(Path::new(p))?,
-        None => {
-            let mut buffer = String::new();
-            io::stdin().read_to_string(&mut buffer)?;
-            LogFile::from_text(buffer)
-        }
+    let mut tail = match path {
+        Some(p) => Tail::file(
+            PathBuf::from(p),
+            resolve_file_settings(Path::new(p), settings)?,
+        ),
+        None if io::stdin().is_terminal() => return Err(io::Error::other(tui::NEEDS_INPUT)),
+        None => Tail::stream(read_lines_in_background(), settings.clone()),
     };
 
     let (_, rows) = terminal::size()?;
-    let mut viewer = tui::viewer_for(log.text(), settings, rows);
+    let mut viewer = tui::viewer_for(tail.read()?, rows);
     let mut out = io::stdout();
 
     enable_raw_mode()?;
     execute!(out, EnterAlternateScreen, cursor::Hide)?;
 
-    let result = tui::run_loop(&mut out, &mut viewer, &mut || event::read());
+    let result = tui::run_loop(
+        &mut out,
+        &mut viewer,
+        &mut || match event::poll(VIEWER_POLL)? {
+            true => event::read().map(Some),
+            false => Ok(None),
+        },
+        &mut || tail.read(),
+    );
 
     execute!(out, cursor::Show, LeaveAlternateScreen)?;
     disable_raw_mode()?;
 
     result
+}
+
+/// Sends each line of standard input as it arrives, so the viewer can show
+/// a pipe that is still being written
+fn read_lines_in_background() -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let _ = io::stdin()
+            .lines()
+            .map_while(Result::ok)
+            .try_for_each(|line| sender.send(line));
+    });
+
+    receiver
 }

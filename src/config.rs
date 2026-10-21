@@ -7,7 +7,9 @@
 use crate::dates::{DateOptions, DateRewrite, UnknownZone};
 use crate::filter::{Filter, FilterError, FilterOptions};
 use crate::keywords::{KeywordError, Keywords};
+use crate::lookups::{LookupError, Lookups};
 use crate::output::{OutputMode, UnknownOutputMode};
+use crate::stats::{StatsError, StatsOptions, StatsSettings};
 use crate::theme::{Theme, ThemeError};
 use crate::toml::{self, TomlError};
 use std::collections::BTreeMap;
@@ -36,6 +38,9 @@ pub enum ConfigError {
     Zone(UnknownZone),
     Keyword(KeywordError),
     BadWordcolor(String),
+    Lookup(LookupError),
+    Stats(StatsError),
+    StatsInViewer,
 }
 
 impl fmt::Display for ConfigError {
@@ -67,6 +72,12 @@ impl fmt::Display for ConfigError {
                 "Invalid wordcolor setting '{}' (expected true or false)",
                 value
             ),
+            ConfigError::Lookup(error) => write!(f, "{}", error),
+            ConfigError::Stats(error) => write!(f, "{}", error),
+            ConfigError::StatsInViewer => write!(
+                f,
+                "The curses viewer cannot show --stats, --summary, or --histogram"
+            ),
         }
     }
 }
@@ -88,6 +99,18 @@ impl From<FilterError> for ConfigError {
 impl From<KeywordError> for ConfigError {
     fn from(error: KeywordError) -> Self {
         ConfigError::Keyword(error)
+    }
+}
+
+impl From<StatsError> for ConfigError {
+    fn from(error: StatsError) -> Self {
+        ConfigError::Stats(error)
+    }
+}
+
+impl From<LookupError> for ConfigError {
+    fn from(error: LookupError) -> Self {
+        ConfigError::Lookup(error)
     }
 }
 
@@ -115,6 +138,7 @@ pub struct Config {
     pub wordcolor: Option<String>,
     pub keywords: Vec<(String, String)>,
     pub patterns: Vec<(String, String)>,
+    pub lookups: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -139,6 +163,9 @@ impl Config {
                 ["wordcolor"] => config.wordcolor = Some(value),
                 ["keywords", name] => config.keywords.push((name.to_string(), value)),
                 ["patterns", name] => config.patterns.push((name.to_string(), value)),
+                ["lookups", name] => {
+                    config.lookups.insert(name.to_string(), value);
+                }
                 ["plugins", plugin, name] => {
                     config
                         .plugins
@@ -340,6 +367,8 @@ pub struct Options {
     pub filter: FilterOptions,
     pub dates: DateOptions,
     pub no_wordcolor: bool,
+    pub lookups: Option<bool>,
+    pub stats: StatsOptions,
 }
 
 /// The parsing mode, output format, and theme splash will run with
@@ -352,6 +381,8 @@ pub struct Settings {
     pub filter: Filter,
     pub dates: DateRewrite,
     pub keywords: Keywords,
+    pub lookups: Lookups,
+    pub stats: StatsSettings,
 }
 
 /// Mode used when neither the command line nor the config file names one
@@ -397,14 +428,27 @@ impl Settings {
             .or_else(|| config.output.clone())
             .unwrap_or_else(|| DEFAULT_OUTPUT.to_string());
 
+        let output_mode: OutputMode = output.parse()?;
+        let dates = DateRewrite::build(&options.dates)?;
+        let stats = StatsSettings::build(
+            &options.stats,
+            options.dates.tz.as_ref().map(|_| dates.display.clone()),
+        )?;
+
+        if output_mode.is_interactive() && stats.collects() {
+            return Err(ConfigError::StatsInViewer);
+        }
+
         Ok(Settings {
             mode,
-            output_mode: output.parse()?,
+            output_mode,
             theme,
             jobs: resolve_jobs(options.jobs, config.jobs.as_deref())?,
             filter: Filter::build(&options.filter)?,
-            dates: DateRewrite::build(&options.dates)?,
+            dates,
             keywords: resolve_keywords(options.no_wordcolor, config)?,
+            lookups: Lookups::build(options.lookups, &config.lookups)?,
+            stats,
         })
     }
 }

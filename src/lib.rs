@@ -30,6 +30,7 @@ pub mod json;
 pub mod keywords;
 pub mod kubernetes;
 pub mod logfmt;
+pub mod lookups;
 pub mod mail;
 pub mod mongodb;
 pub mod mysql;
@@ -50,10 +51,12 @@ pub mod resolved;
 pub mod source;
 pub mod squid;
 pub mod ssh;
+pub mod stats;
 pub mod sudo;
 pub mod sulog;
 pub mod super_log;
 pub mod syslog;
+pub mod tail;
 pub mod terraform;
 pub mod theme;
 pub mod time;
@@ -71,10 +74,13 @@ use crate::dates::DateRewrite;
 use crate::discovery::PluginDiscovery;
 use crate::filter::{Entry, Filter, Judgement};
 use crate::keywords::Keywords;
-use crate::output::OutputMode;
+use crate::lookups::Lookups;
+use crate::output::{escape_html, OutputMode};
 use crate::registry::PluginRegistry;
 use crate::source::LogFile;
+use crate::stats::{Facts, Stats, StatsSettings};
 use crate::theme::Theme;
+use crate::viewer::Line;
 use std::io;
 use std::path::Path;
 use std::thread;
@@ -130,9 +136,15 @@ pub fn render_lines_with_jobs(
         filter: &Filter::default(),
         dates: &DateRewrite::default(),
         keywords: &Keywords::none(),
+        lookups: &Lookups::none(),
+        stats: &StatsSettings::default(),
     };
 
-    renderer.render(contents, jobs, &mut Entry::default())
+    renderer
+        .render(contents, jobs, &mut Entry::default(), &mut Stats::default())
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
 }
 
 /// Renders a chunk of log text across `jobs` threads, one output line per
@@ -157,22 +169,84 @@ pub fn render_contents_with_jobs(
 /// string per kept line. `entry` carries the entry the last line belonged to
 /// over to the next chunk of the same input.
 pub fn render_settings(contents: &str, settings: &Settings, entry: &mut Entry) -> Vec<String> {
-    let renderer = Renderer {
-        mode: &settings.mode,
-        output_mode: settings.output_mode,
-        theme: &settings.theme,
-        filter: &settings.filter,
-        dates: &settings.dates,
-        keywords: &settings.keywords,
-    };
+    render_settings_counted(contents, settings, entry, &mut Stats::default())
+}
 
-    renderer.render(contents, settings.jobs, entry)
+/// Renders a chunk of log text with every setting, as one string per kept
+/// line, counting the kept lines in `stats` when the settings ask for
+/// statistics. No lines are rendered when a report replaces them.
+pub fn render_settings_counted(
+    contents: &str,
+    settings: &Settings,
+    entry: &mut Entry,
+    stats: &mut Stats,
+) -> Vec<String> {
+    Renderer::for_settings(settings)
+        .render(contents, settings.jobs, entry, stats)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// Renders a chunk of log text with every setting, pairing each kept line's
+/// rendering with the log text it came from
+pub fn render_viewer_lines(contents: &str, settings: &Settings, entry: &mut Entry) -> Vec<Line> {
+    Renderer::for_settings(settings)
+        .render(contents, settings.jobs, entry, &mut Stats::default())
+        .into_iter()
+        .map(|(raw, text)| Line::new(raw, &text))
+        .collect()
 }
 
 /// Renders a chunk of log text with every setting, one output line per kept
 /// line
 pub fn render_contents_settings(contents: &str, settings: &Settings, entry: &mut Entry) -> String {
     join_lines(render_settings(contents, settings, entry))
+}
+
+/// Renders a chunk of log text with every setting, one output line per kept
+/// line, counting the kept lines in `stats`
+pub fn render_contents_counted(
+    contents: &str,
+    settings: &Settings,
+    entry: &mut Entry,
+    stats: &mut Stats,
+) -> String {
+    join_lines(render_settings_counted(contents, settings, entry, stats))
+}
+
+/// The text written before the first line: the header of an output format
+/// that needs one, unless a report replaces the lines
+pub fn opening(settings: &Settings) -> String {
+    match settings.output_mode.header(&settings.theme) {
+        Some(header) if settings.stats.shows_lines() => header,
+        _ => String::new(),
+    }
+}
+
+/// The text written each time a chunk of input has been rendered: the
+/// report that replaces the lines, if there is one
+pub fn progress(settings: &Settings, stats: &Stats) -> String {
+    settings.stats.report(stats).unwrap_or_default()
+}
+
+/// The text written when the input ends: the summary, if one was asked for,
+/// and the footer of an output format that needs one
+pub fn closing(settings: &Settings, stats: &Stats) -> String {
+    let mut text = String::new();
+
+    if let Some(summary) = settings.stats.summary(stats) {
+        text.push_str(&match settings.output_mode {
+            OutputMode::Html => escape_html(&summary),
+            _ => summary,
+        });
+    }
+
+    if settings.stats.shows_lines() {
+        text.push_str(&settings.output_mode.footer().unwrap_or_default());
+    }
+
+    text
 }
 
 /// Reads a log file and renders all of it, memory mapping the file when it is
@@ -209,9 +283,19 @@ fn join_lines(lines: Vec<String>) -> String {
     joined
 }
 
-/// A line's rendering, when the line could be kept, and how the filter
-/// judged it
-type JudgedLine = (Judgement, Option<String>);
+/// A line's rendering and facts, when the line could be kept, and how the
+/// filter judged it
+type JudgedLine<'c> = (Judgement, Option<Kept<'c>>);
+
+/// What a line that could be kept leaves for the output
+struct Kept<'c> {
+    /// The line as the log wrote it
+    raw: &'c str,
+    /// The rendered line, which is empty when a report replaces the lines
+    text: String,
+    /// What the statistics need from the line, when the run collects them
+    facts: Option<Facts>,
+}
 
 /// Everything rendering a line takes besides the line
 struct Renderer<'a> {
@@ -221,10 +305,32 @@ struct Renderer<'a> {
     filter: &'a Filter,
     dates: &'a DateRewrite,
     keywords: &'a Keywords,
+    lookups: &'a Lookups,
+    stats: &'a StatsSettings,
 }
 
-impl Renderer<'_> {
-    fn render(&self, contents: &str, jobs: usize, entry: &mut Entry) -> Vec<String> {
+impl<'a> Renderer<'a> {
+    fn for_settings(settings: &'a Settings) -> Renderer<'a> {
+        Renderer {
+            mode: &settings.mode,
+            output_mode: settings.output_mode,
+            theme: &settings.theme,
+            filter: &settings.filter,
+            dates: &settings.dates,
+            keywords: &settings.keywords,
+            lookups: &settings.lookups,
+            stats: &settings.stats,
+        }
+    }
+
+    /// Each kept line as the log wrote it, paired with its rendering
+    fn render<'c>(
+        &self,
+        contents: &'c str,
+        jobs: usize,
+        entry: &mut Entry,
+        stats: &mut Stats,
+    ) -> Vec<(&'c str, String)> {
         let mode = detect::resolve_mode(self.mode, contents);
         let renderer = Renderer {
             mode: &mode,
@@ -238,20 +344,31 @@ impl Renderer<'_> {
             renderer.render_parallel(&lines, jobs)
         };
 
-        judged
-            .into_iter()
-            .filter_map(|(judgement, rendered)| {
-                let kept = entry.admit(judgement);
-                rendered.filter(|_| kept)
-            })
-            .collect()
+        let mut rendered = Vec::new();
+
+        for (judgement, kept) in judged {
+            let admitted = entry.admit(judgement);
+            let Some(kept) = kept.filter(|_| admitted) else {
+                continue;
+            };
+
+            if let Some(facts) = kept.facts {
+                stats.record(facts);
+            }
+
+            if self.stats.shows_lines() {
+                rendered.push((kept.raw, kept.text));
+            }
+        }
+
+        rendered
     }
 
-    fn render_parallel(&self, lines: &[&str], jobs: usize) -> Vec<JudgedLine> {
+    fn render_parallel<'c>(&self, lines: &[&'c str], jobs: usize) -> Vec<JudgedLine<'c>> {
         let per_thread = lines.len().div_ceil(jobs);
 
         thread::scope(|scope| {
-            let workers: Vec<thread::ScopedJoinHandle<'_, Vec<JudgedLine>>> = lines
+            let workers: Vec<thread::ScopedJoinHandle<'_, Vec<JudgedLine<'c>>>> = lines
                 .chunks(per_thread)
                 .map(|chunk| scope.spawn(move || self.render_slice(chunk)))
                 .collect();
@@ -265,20 +382,30 @@ impl Renderer<'_> {
 
     /// Parses, judges, and renders each line. A line that cannot be kept
     /// whatever entry it belongs to is not rendered.
-    fn render_slice(&self, lines: &[&str]) -> Vec<JudgedLine> {
+    fn render_slice<'c>(&self, lines: &[&'c str]) -> Vec<JudgedLine<'c>> {
         lines
             .iter()
-            .filter_map(|line| parser::parse_line(line, self.mode))
-            .map(|parsed| {
+            .filter_map(|raw| parser::parse_line(raw, self.mode).map(|parsed| (*raw, parsed)))
+            .map(|(raw, parsed)| {
                 let judgement = self.filter.judge(&parsed);
-                let rendered = (judgement.matches && judgement.entry != Some(false)).then(|| {
-                    let rewritten = self.keywords.apply(self.dates.apply(parsed));
+                let kept = (judgement.matches && judgement.entry != Some(false)).then(|| {
+                    let facts = self.stats.collects().then(|| self.stats.facts(&parsed));
 
-                    self.output_mode
-                        .render(&self.filter.highlight(rewritten), self.theme)
+                    let text = if self.stats.shows_lines() {
+                        let rewritten = self
+                            .keywords
+                            .apply(self.lookups.apply(self.dates.apply(parsed)));
+
+                        self.output_mode
+                            .render(&self.filter.highlight(rewritten), self.theme)
+                    } else {
+                        String::new()
+                    };
+
+                    Kept { raw, text, facts }
                 });
 
-                (judgement, rendered)
+                (judgement, kept)
             })
             .collect()
     }

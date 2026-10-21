@@ -624,3 +624,20 @@ fn a_pattern_holds_its_compiled_regex() {
 
     assert_eq!(patterns[0].regex.as_str(), "a+");
 }
+
+#[test]
+fn every_level_has_a_name() {
+    assert_eq!(
+        [
+            Level::Trace,
+            Level::Debug,
+            Level::Info,
+            Level::Notice,
+            Level::Warning,
+            Level::Error,
+            Level::Critical,
+        ]
+        .map(|level| level.name()),
+        ["trace", "debug", "info", "notice", "warning", "error", "critical"]
+    );
+}

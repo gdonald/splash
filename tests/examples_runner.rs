@@ -6257,3 +6257,492 @@ fn test_a_config_file_adds_keywords_and_patterns() {
     ));
     assert!(stdout.contains(r#"{"kind":"transaction","text":"req-4f2a1c01"}"#));
 }
+
+// ==================== Lookup Tests ====================
+
+/// A home directory whose config file points every lookup at the example
+/// account, service, and network files
+fn lookups_home(enabled: bool) -> tempfile::TempDir {
+    let home = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(home.path().join(".splash")).unwrap();
+    std::fs::write(
+        home.path().join(".splash/config.toml"),
+        format!(
+            "mode = \"auth\"\noutput = \"json\"\n\n[lookups]\nenabled = {}\npasswd = \"{}\"\nservices = \"{}\"\ngeoip = \"{}\"\n",
+            enabled,
+            example_path("lookups_passwd.txt").display(),
+            example_path("lookups_services.txt").display(),
+            example_path("lookups_networks.csv").display(),
+        ),
+    )
+    .unwrap();
+
+    home
+}
+
+fn lookups_example(enabled: bool, args: &[&str]) -> String {
+    let home = lookups_home(enabled);
+    let output = run_splash_with_home(home.path(), args, &example_contents("lookups.log")).unwrap();
+
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+#[test]
+fn test_lookups_mark_unknown_users_and_name_services_and_locations() {
+    let output = lookups_example(false, &["--lookups"]);
+
+    for expected in [
+        r#"{"kind":"userid","text":"alice"}"#,
+        r#"{"kind":"unknown_user","text":"admin"}"#,
+        r#"{"kind":"number","text":"22"},{"kind":"service","text":"(ssh)"}"#,
+        r#"{"kind":"ip","text":"203.0.113.7"},{"kind":"location","text":" (US, Boston)"}"#,
+    ] {
+        assert!(output.contains(expected), "missing {}", expected);
+    }
+}
+
+#[test]
+fn test_a_config_file_can_turn_lookups_on() {
+    let output = lookups_example(true, &[]);
+
+    assert!(output.contains(r#"{"kind":"unknown_user","text":"admin"}"#));
+}
+
+#[test]
+fn test_no_lookups_wins_over_the_config_file() {
+    let output = lookups_example(true, &["--no-lookups"]);
+
+    assert!(output.contains(r#"{"kind":"userid","text":"admin"}"#));
+    assert!(!output.contains(r#""kind":"service""#));
+}
+
+#[test]
+fn test_lookups_and_no_lookups_cannot_be_combined() {
+    let output = run_splash(&["--lookups", "--no-lookups"]).unwrap();
+
+    assert!(!output.status.success());
+}
+
+// ==================== Statistics Tests ====================
+
+fn stats_example(args: &[&str]) -> String {
+    let mut args = args.to_vec();
+    args.extend(["--mode", "httpd", "--tz", "UTC"]);
+
+    run_splash_with_stdin_args(&args, &example_contents("stats_access.log")).unwrap()
+}
+
+/// Follows a copy of the example access log, appends `appended` to it once
+/// the first output has arrived, and stops splash with SIGINT once the
+/// output for the appended lines has arrived, returning everything written
+#[cfg(unix)]
+fn follow_stats_example(args: &[&str], appended: &str) -> String {
+    let directory = tempfile::TempDir::new().unwrap();
+    let log = directory.path().join("access.log");
+    std::fs::write(&log, example_contents("stats_access.log")).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(args)
+        .args(["--mode", "httpd", "--tz", "UTC", "--path"])
+        .arg(&log)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let collect = |output: &mut Vec<u8>| {
+        if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            output.extend(chunk);
+
+            while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+                output.extend(chunk);
+            }
+        }
+    };
+
+    let mut output = Vec::new();
+    collect(&mut output);
+
+    if !appended.is_empty() {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .unwrap()
+            .write_all(appended.as_bytes())
+            .unwrap();
+        collect(&mut output);
+    }
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    assert!(child.wait().unwrap().success());
+
+    while let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+        output.extend(chunk);
+    }
+
+    String::from_utf8_lossy(&output).to_string()
+}
+
+#[test]
+fn test_stats_write_a_report_in_place_of_the_lines() {
+    let output = stats_example(&["--stats"]);
+
+    assert!(output.starts_with("Statistics\n==========\nLines:         6\nErrors:        2\n"));
+    assert!(output.contains("\nTop URLs:\n  /index.html    3\n"));
+    assert!(!output.contains("HTTP/1.1"));
+}
+
+#[test]
+fn test_stats_are_written_as_json() {
+    let output = stats_example(&["--stats", "--stats-format", "json"]);
+
+    assert!(output.starts_with(r#"{"lines":6,"errors":2,"error_percent":33.3,"requests":6,"#));
+}
+
+#[test]
+fn test_summary_follows_the_lines() {
+    let output = stats_example(&["--summary", "--output", "plain"]);
+
+    assert!(output.starts_with("10.0.0.5 - alice [2023-10-03T12:00:01Z]"));
+    assert!(output.ends_with(
+        "Summary\n=======\nLines:       6\nErrors:      2\nError rate:  33.3%\nFrom:        2023-10-03T12:00:01Z\nTo:          2023-10-03T14:10:01Z\n"
+    ));
+}
+
+#[test]
+fn test_histogram_counts_lines_per_hour_by_default() {
+    let output = stats_example(&["--histogram"]);
+
+    assert!(output.starts_with("Lines per 1h\n"));
+    assert!(output.contains("2023-10-03T13:00:00Z"));
+}
+
+#[test]
+fn test_histogram_takes_a_period_and_a_format() {
+    let output = stats_example(&["--histogram", "1d", "--stats-format", "csv"]);
+
+    assert_eq!(output, "start,count\n2023-10-03T00:00:00Z,6\n");
+}
+
+#[test]
+fn test_stats_and_histogram_cannot_be_combined() {
+    let output = run_splash(&["--stats", "--histogram", "1h"]).unwrap();
+
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_an_unknown_histogram_period_is_reported() {
+    let output = run_splash(&["--histogram", "1w"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid histogram period '1w'"));
+}
+
+#[test]
+fn test_stats_cannot_be_shown_in_the_curses_viewer() {
+    let output = run_splash(&["--stats", "--output", "curses"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("The curses viewer cannot show --stats, --summary, or --histogram"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_stats_are_written_again_as_a_followed_file_grows() {
+    let output = follow_stats_example(
+        &["--stats", "--stats-format", "csv"],
+        "10.0.0.9 - - [03/Oct/2023:14:20:00 +0000] \"GET /index.html HTTP/1.1\" 200 5120 \"-\" \"curl/8.4.0\"\n",
+    );
+
+    let line_counts: Vec<&str> = output
+        .lines()
+        .filter(|line| line.starts_with("lines,,"))
+        .collect();
+
+    assert_eq!(line_counts, vec!["lines,,6", "lines,,7"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_summary_is_written_when_following_a_file_is_interrupted() {
+    let output = follow_stats_example(&["--summary", "--output", "plain"], "");
+
+    assert!(output.contains("/api/queue/91"));
+    assert!(output.ends_with("To:          2023-10-03T14:10:01Z\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_html_output_is_closed_when_following_a_file_is_interrupted() {
+    let output = follow_stats_example(&["--output", "html"], "");
+
+    assert!(output.ends_with("</html>\n"));
+}
+
+// ==================== Viewer Terminal Tests ====================
+
+/// How long a viewer run in a pseudo-terminal may take to draw what a test
+/// waits for
+#[cfg(unix)]
+const VIEWER_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Splash running in a pseudo-terminal that is its controlling terminal, so
+/// the viewer reads keys from it and never from the terminal running the
+/// tests
+#[cfg(unix)]
+struct TerminalRun {
+    child: std::process::Child,
+    keyboard: std::fs::File,
+    screen: mpsc::Receiver<Vec<u8>>,
+    drawn: String,
+}
+
+#[cfg(unix)]
+impl TerminalRun {
+    /// Starts splash in a 24 by 120 terminal, with standard input from a
+    /// pipe holding `piped` when it is given
+    fn start(args: &[&str], piped: Option<&str>) -> TerminalRun {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::process::CommandExt;
+
+        let (mut primary, mut secondary) = (0, 0);
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        let opened = unsafe {
+            libc::openpty(
+                &mut primary,
+                &mut secondary,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        assert_eq!(opened, 0);
+
+        let primary = unsafe { std::fs::File::from_raw_fd(primary) };
+        let secondary_handle = unsafe { OwnedFd::from_raw_fd(secondary) };
+        let keep_stdin = piped.is_some();
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
+        command.args(args).stdin(if keep_stdin {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
+
+        unsafe {
+            command.pre_exec(move || {
+                let saved_stdin = libc::dup(0);
+
+                if libc::login_tty(secondary) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                if keep_stdin {
+                    libc::dup2(saved_stdin, 0);
+                }
+
+                libc::close(saved_stdin);
+
+                Ok(())
+            });
+        }
+
+        let mut child = command.spawn().unwrap();
+        drop(command);
+        drop(secondary_handle);
+
+        if let (Some(text), Some(mut stdin)) = (piped, child.stdin.take()) {
+            stdin.write_all(text.as_bytes()).unwrap();
+        }
+
+        let keyboard = primary.try_clone().unwrap();
+        let (sender, screen) = mpsc::channel();
+
+        thread::spawn(move || {
+            let mut primary = primary;
+            let mut buffer = [0u8; 8192];
+
+            while let Ok(count) = primary.read(&mut buffer) {
+                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+
+        TerminalRun {
+            child,
+            keyboard,
+            screen,
+            drawn: String::new(),
+        }
+    }
+
+    /// Waits until the terminal shows `text`
+    fn wait_for(&mut self, text: &str) {
+        let deadline = std::time::Instant::now() + VIEWER_DEADLINE;
+
+        while !self.drawn.contains(text) {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+
+            match self.screen.recv_timeout(left) {
+                Ok(chunk) => self.drawn.push_str(&String::from_utf8_lossy(&chunk)),
+                Err(_) => {
+                    let _ = self.child.kill();
+                    panic!("never showed {:?}, showed {:?}", text, self.drawn);
+                }
+            }
+        }
+    }
+
+    fn type_keys(&mut self, keys: &str) {
+        self.keyboard.write_all(keys.as_bytes()).unwrap();
+    }
+
+    /// Waits for splash to exit, returning whether it succeeded
+    fn finish(mut self) -> bool {
+        let deadline = std::time::Instant::now() + VIEWER_DEADLINE;
+
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status.success();
+            }
+
+            if std::time::Instant::now() > deadline {
+                let _ = self.child.kill();
+                panic!("splash did not exit, showed {:?}", self.drawn);
+            }
+
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_a_log_file_until_quit() {
+    let path = example_path("stats_access.log");
+    let mut run = TerminalRun::start(
+        &[
+            "--output",
+            "curses",
+            "--mode",
+            "httpd",
+            "--path",
+            path.to_str().unwrap(),
+        ],
+        None,
+    );
+
+    run.wait_for("lines 1-6 of 6");
+    run.type_keys("q");
+
+    assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_searches_and_splits_the_view() {
+    let path = example_path("stats_access.log");
+    let mut run = TerminalRun::start(
+        &[
+            "--output",
+            "curses",
+            "--mode",
+            "httpd",
+            "--path",
+            path.to_str().unwrap(),
+        ],
+        None,
+    );
+
+    run.wait_for("lines 1-6 of 6");
+    run.type_keys("/503\r");
+    run.wait_for("match at line 6");
+    run.type_keys("s");
+    run.wait_for("---- log text ----");
+    run.type_keys("q");
+
+    assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_lines_a_followed_file_gains() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let path = directory.path().join("access.log");
+    std::fs::write(&path, example_contents("stats_access.log")).unwrap();
+
+    let mut run = TerminalRun::start(
+        &[
+            "--output",
+            "curses",
+            "--mode",
+            "httpd",
+            "--path",
+            path.to_str().unwrap(),
+        ],
+        None,
+    );
+
+    run.wait_for("lines 1-6 of 6");
+    run.type_keys("f");
+    run.wait_for("[follow]");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"10.0.0.9 - - [03/Oct/2023:14:20:00 +0000] \"GET /fresh HTTP/1.1\" 200 1 \"-\" \"curl/8.4.0\"\n")
+        .unwrap();
+    run.wait_for("lines 1-7 of 7");
+    run.type_keys("q");
+
+    assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_a_piped_log() {
+    let mut run = TerminalRun::start(
+        &["--output", "curses", "--mode", "httpd"],
+        Some(&example_contents("stats_access.log")),
+    );
+
+    run.wait_for("lines 1-6 of 6");
+    run.type_keys("q");
+
+    assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_needs_a_log_to_show() {
+    let mut run = TerminalRun::start(&["--output", "curses"], None);
+
+    run.wait_for("curses output needs a log; give --path or pipe one in");
+
+    assert!(!run.finish());
+}

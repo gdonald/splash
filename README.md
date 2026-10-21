@@ -144,6 +144,16 @@ Options:
                                          2 hours ago
       --no-wordcolor                     Leave keywords such as ERROR, TCP, and SELECT in the style
                                          around them
+      --lookups                          Mark unknown users, and follow ports and addresses with
+                                         their services, hosts, and locations
+      --no-lookups                       Turn lookups off, even when the config file turns them on
+      --stats                            Write statistics on the kept lines in place of the lines
+      --summary                          Write the line count, error count, and time range after the
+                                         lines
+      --histogram [<PERIOD>]             Write the number of lines in each period, such as 5m or 1h,
+                                         in place of the lines
+      --stats-format <FORMAT>            Format of --stats, --summary, and --histogram (text, json,
+                                         csv)
   -h, --help                             Print help
   -V, --version                          Print version
 ```
@@ -288,6 +298,139 @@ transaction = "req-[0-9a-f]{8}"
 
 ---
 
+## Lookups
+
+`--lookups`, or `enabled = true` in the config file's `[lookups]` table, turns on lookups.
+`--no-lookups` turns them off when the config file turns them on.
+
+```bash
+splash --mode auth --lookups --path /var/log/auth.log
+```
+
+| Lookup | What it does | Color key |
+|--------|--------------|-----------|
+| Users | Styles a user name the system's account database does not hold | `unknown_user` |
+| Ports | Follows a port written as `port 22`, or after an address as `10.0.0.5:22`, with its service from `/etc/services`, as `port 22(ssh)` | `service` |
+| Host names | Follows an IPv4 address with the name reverse DNS gives it, as `10.0.0.5 (gateway.lan)` | `host` |
+| Locations | Follows an IPv4 address with the location a network table gives it, as `203.0.113.7 (US, Boston)` | `location` |
+
+Users are the fields a mode reads as a user name, such as the user in an sshd line or an access
+log's userid. A `-` in place of a user is left alone. Addresses are the fields a mode reads as an
+address or an access log's client.
+
+The `[lookups]` table chooses which lookups run and where they read from:
+
+```toml
+[lookups]
+enabled = true
+users = true                          # default true
+ports = true                          # default true
+dns = false                           # default false, since each new address waits on a resolver
+passwd = "/srv/logs/web01/passwd"     # read user names from this file instead of the system
+services = "/etc/services"            # the default
+geoip = "/etc/splash/networks.csv"    # no default, so locations are off without it
+```
+
+`passwd` reads user names from a file in `/etc/passwd` format, such as one copied from the host
+that wrote the log. `services` reads a file in `/etc/services` format, and when a port has several
+names the first one wins. `geoip` reads a network table with one `NETWORK/BITS,COUNTRY,CITY` line
+per network, where the city can be left off and lines starting with `#` are skipped. An address
+in several networks takes the location of the narrowest one.
+
+```
+# NETWORK/BITS,COUNTRY,CITY
+203.0.113.0/24,US,Boston
+198.51.100.0/24,DE
+```
+
+Each user, address, and location is looked up once per run.
+
+---
+
+## Statistics
+
+```bash
+# A report on an access log in place of its lines
+splash --mode httpd --stats --path /var/log/nginx/access.log
+
+# The lines, then the line count, error count, and time range
+splash --auto --summary --path /var/log/app.log
+
+# Lines per 5 minutes, as CSV
+journalctl | splash --mode journalctl --histogram 5m --stats-format csv
+```
+
+`--stats` writes a report on the lines splash keeps in place of the lines:
+
+```
+Statistics
+==========
+Lines:         6
+Errors:        2
+Error rate:    33.3%
+Requests:      6
+Request rate:  0.0008/s
+From:          2023-10-03T12:00:01Z
+To:            2023-10-03T14:10:01Z
+
+Status codes:
+  200  2
+  302  1
+  404  1
+  500  1
+  503  1
+
+Top addresses:
+  10.0.0.5  3
+  10.0.0.7  2
+  10.0.0.9  1
+...
+```
+
+A line is an error when it is written at the `error` or `critical` level (see [Levels](#levels)),
+or its status field starts with 5, as HTTP's 5xx and SMTP's 5.x.x statuses do. A request is a line
+holding an HTTP method, and the request rate is the requests per second between the first and
+last timestamps. The report lists the levels, the status codes, and the ten addresses, request
+URLs, and user agents seen most, with ties in value order. A table with no rows is left out.
+
+`--summary` writes the line count, error count, error rate, and time range after the lines.
+`--histogram PERIOD` writes the number of lines in each period in place of the lines, with a bar
+scaled to the busiest period. A period is a count and a unit of `s`, `m`, `h`, or `d`, and
+defaults to `1h`. Periods start on the wall clock, so `1d` periods start at midnight, and every
+period from the first timestamp to the last is listed, including empty ones. Lines with no
+timestamp are not in the histogram.
+
+```
+Lines per 1h
+============
+2023-10-03T12:00:00Z  ########################################  4
+2023-10-03T13:00:00Z                                            0
+2023-10-03T14:00:00Z  ####################                      2
+```
+
+Times are written in RFC 3339 in the local zone, or in the `--tz` zone. Filters apply first, so
+statistics count only the lines splash keeps.
+
+`--stats-format json` writes each report as one JSON object, and `--stats-format csv` writes the
+report and summary as `metric,key,value` rows and the histogram as `start,count` rows:
+
+```
+metric,key,value
+lines,,6
+errors,,2
+error_percent,,33.3
+...
+status,200,2
+address,10.0.0.5,3
+```
+
+Reading from standard input, splash writes the report or summary when the input ends. Following
+a file with `--path`, it writes the `--stats` or `--histogram` report again each time the file
+grows, and writes the summary when it is stopped with Ctrl-C or `kill`. The curses viewer does
+not show statistics, so `--output curses` cannot be combined with them.
+
+---
+
 ## Configuration
 
 splash reads `~/.splash/config.toml`, falling back to `~/.splashrc`. Both use the same format.
@@ -318,6 +461,10 @@ failure = "timed out, refused"
 
 [patterns]
 transaction = "req-[0-9a-f]{8}"
+
+# Lookups (see Lookups)
+[lookups]
+enabled = true
 ```
 
 Command line options win over the config file. Colors are layered: the theme or profile first,
@@ -342,7 +489,7 @@ HTML class names: `plain`, `punctuation`, `ip`, `number`, `datetime`, `tz_offset
 `module`, `pid`, `message`, `cache_hit`, `cache_miss`, `cache_result`, `hierarchy`,
 `content_type`, `transaction`, `tag`, `header`, `host`, `frontend`, `backend`, `server`,
 `timers`, `termination`, `counters`, `email`, `queue_id`, `path`, `success`, `warning`,
-`failure`, `match`, `capture`, and `keyword`.
+`failure`, `match`, `capture`, `keyword`, `unknown_user`, `service`, and `location`.
 
 A color is one of the sixteen ANSI color names (`red`, `bright cyan`, `gray`), a hex value
 (`#ff5555`), or either of those followed by `bold`.
@@ -1427,24 +1574,44 @@ splash --mode clf --path access.log
 
 ### curses
 
-A full-screen scrollable viewer. splash reads the whole input, colorizes it, and shows one
-screenful at a time with a status line giving the visible range.
+A full-screen scrollable viewer. splash colorizes the input and shows one screenful at a time,
+with a status line giving the visible range, any filters, and the modes that are on.
 
 ```bash
 splash --mode clf --path access.log --output curses
+tail -f /var/log/syslog | splash --mode syslog --output curses
 ```
+
+The viewer keeps reading its input while it is open: lines a `--path` file gains, and lines a
+pipe is still writing, are added as they arrive. A file that shrinks was truncated or replaced,
+and is read again from its beginning.
 
 | Key | Action |
 | --- | --- |
-| `j`, down arrow | Scroll down one line |
+| `j`, down arrow, enter | Scroll down one line |
 | `k`, up arrow | Scroll up one line |
-| `f`, space, page down | Scroll down one screen |
-| `b`, page up | Scroll up one screen |
-| `g`, home | Jump to the first line |
+| space, Ctrl-f, page down | Scroll down one screen |
+| `b`, Ctrl-b, page up | Scroll up one screen |
+| Ctrl-d, Ctrl-u | Scroll down or up half a screen |
+| `gg`, home | Jump to the first line |
 | `G`, end | Jump to the last screen |
+| `/PATTERN` enter | Search forward for a regular expression |
+| `n`, `N` | Find the next or previous match, wrapping around the ends |
+| `&PATTERN` enter | Show only lines matching the pattern |
+| `&!PATTERN` enter | Hide lines matching the pattern |
+| `&` enter | Remove every filter |
+| `s` | Split the screen: rendered lines above, the same lines as the log wrote them below |
+| `f` | Follow: stay on the last lines as new ones arrive |
 | `q`, escape | Quit |
 
-The viewer needs a terminal. Redirecting its output exits with an error naming the other modes.
+A count typed before a key repeats it, as in `5j` or `3n`, and a count before `G` or `gg` jumps to
+that line, as in `120G`. Searches and filters match the text as the log wrote it, not the colored
+rendering. Filters combine, so `&GET` then `&!healthz` shows the GET lines that do not mention
+`/healthz`, and a search finds only lines the filters show. Scrolling up stops following. While a
+search or filter is being typed, backspace deletes a character and escape cancels it.
+
+The viewer needs a terminal. Redirecting its output exits with an error naming the other modes,
+and running it with no `--path` and no pipe exits with an error.
 
 ### html
 
@@ -1593,7 +1760,7 @@ on yours before drawing conclusions from them.
 
 **Output Formats**
 - ANSI colors (default)
-- Curses viewer with scrolling and vim-style keys
+- Curses viewer with vim-style keys, search, filters, split panes, and live updates
 - HTML with a customizable stylesheet
 - JSON with named token kinds
 - Plain text

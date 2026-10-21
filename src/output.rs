@@ -60,6 +60,9 @@ pub enum TokenKind {
     Match,
     Capture,
     Keyword,
+    UnknownUser,
+    Service,
+    Location,
 }
 
 impl TokenKind {
@@ -115,11 +118,14 @@ impl TokenKind {
             TokenKind::Match => "match",
             TokenKind::Capture => "capture",
             TokenKind::Keyword => "keyword",
+            TokenKind::UnknownUser => "unknown_user",
+            TokenKind::Service => "service",
+            TokenKind::Location => "location",
         }
     }
 
     /// The number of distinct token styles
-    pub const COUNT: usize = 49;
+    pub const COUNT: usize = 52;
 
     /// Position of this style in `all()`, used to index a theme
     pub fn index(&self) -> usize {
@@ -188,6 +194,9 @@ impl TokenKind {
             TokenKind::Match,
             TokenKind::Capture,
             TokenKind::Keyword,
+            TokenKind::UnknownUser,
+            TokenKind::Service,
+            TokenKind::Location,
         ]
     }
 }

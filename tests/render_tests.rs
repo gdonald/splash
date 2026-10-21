@@ -1,7 +1,10 @@
 use splash::config::{Config, Options, Profiles, Settings};
 use splash::filter::{Entry, FilterOptions};
 use splash::output::OutputMode;
+use splash::stats::{Stats, StatsOptions, StatsSettings};
 use splash::theme::Theme;
+use splash::zone::Zone;
+use splash::{closing, opening, progress, render_contents_counted, render_settings_counted};
 use splash::{
     default_jobs, render_contents, render_contents_settings, render_contents_with_jobs,
     render_lines, render_lines_with_jobs, render_settings, PARALLEL_THRESHOLD,
@@ -411,5 +414,153 @@ fn a_log_file_is_rendered_with_its_filters() {
             .lines()
             .count(),
         2
+    );
+}
+
+/// Settings for the example error log with the statistics options given,
+/// writing times in UTC
+fn counted(output: &str, options: StatsOptions) -> Settings {
+    let resolved = Settings::resolve(
+        &Options {
+            mode: Some("auto".to_string()),
+            output: Some(output.to_string()),
+            jobs: Some(1),
+            ..Options::default()
+        },
+        &Config::default(),
+        &Profiles::new(std::path::PathBuf::from("unused")),
+    )
+    .unwrap();
+
+    Settings {
+        stats: StatsSettings::build_at(&options, Zone::Utc, Zone::Utc, 0).unwrap(),
+        ..resolved
+    }
+}
+
+fn stats_report() -> StatsOptions {
+    StatsOptions {
+        stats: true,
+        ..StatsOptions::default()
+    }
+}
+
+fn summary_after_lines() -> StatsOptions {
+    StatsOptions {
+        summary: true,
+        ..StatsOptions::default()
+    }
+}
+
+#[test]
+fn rendering_counts_the_kept_lines() {
+    let mut stats = Stats::default();
+
+    render_settings_counted(
+        ENTRIES,
+        &counted("plain", summary_after_lines()),
+        &mut Entry::default(),
+        &mut stats,
+    );
+
+    assert_eq!((stats.lines, stats.errors), (4, 1));
+}
+
+#[test]
+fn rendering_without_statistics_counts_nothing() {
+    let mut stats = Stats::default();
+
+    render_settings_counted(
+        ENTRIES,
+        &counted("plain", StatsOptions::default()),
+        &mut Entry::default(),
+        &mut stats,
+    );
+
+    assert_eq!(stats, Stats::default());
+}
+
+#[test]
+fn rendering_for_a_report_writes_no_lines() {
+    let mut stats = Stats::default();
+
+    assert_eq!(
+        render_contents_counted(
+            ENTRIES,
+            &counted("plain", stats_report()),
+            &mut Entry::default(),
+            &mut stats,
+        ),
+        ""
+    );
+}
+
+#[test]
+fn rendering_with_a_summary_writes_the_lines() {
+    let rendered = render_contents_counted(
+        ENTRIES,
+        &counted("plain", summary_after_lines()),
+        &mut Entry::default(),
+        &mut Stats::default(),
+    );
+
+    assert_eq!(rendered, ENTRIES);
+}
+
+#[test]
+fn the_opening_is_the_html_header_when_lines_are_written() {
+    assert!(opening(&counted("html", summary_after_lines())).starts_with("<!DOCTYPE html>"));
+}
+
+#[test]
+fn there_is_no_opening_when_a_report_replaces_the_lines() {
+    assert_eq!(opening(&counted("html", stats_report())), "");
+}
+
+#[test]
+fn there_is_no_opening_for_a_format_without_a_header() {
+    assert_eq!(opening(&counted("plain", StatsOptions::default())), "");
+}
+
+#[test]
+fn the_progress_is_the_report() {
+    assert!(
+        progress(&counted("plain", stats_report()), &Stats::default()).starts_with("Statistics\n")
+    );
+}
+
+#[test]
+fn there_is_no_progress_when_lines_are_written() {
+    assert_eq!(
+        progress(&counted("plain", summary_after_lines()), &Stats::default()),
+        ""
+    );
+}
+
+#[test]
+fn the_closing_is_the_summary() {
+    assert!(
+        closing(&counted("plain", summary_after_lines()), &Stats::default())
+            .starts_with("Summary\n")
+    );
+}
+
+#[test]
+fn the_closing_in_html_is_the_escaped_summary_then_the_footer() {
+    let options = StatsOptions {
+        format: Some("json".to_string()),
+        ..summary_after_lines()
+    };
+    let closing = closing(&counted("html", options), &Stats::default());
+
+    assert!(closing.starts_with("{&quot;lines&quot;:0"));
+    assert!(closing.ends_with("</html>\n"));
+}
+
+#[test]
+fn the_closing_after_a_report_has_no_footer() {
+    assert_eq!(
+        closing(&counted("html", stats_report()), &Stats::default()),
+        ""
     );
 }

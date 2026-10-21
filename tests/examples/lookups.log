@@ -1,0 +1,2 @@
+Oct  3 12:00:01 web01 sshd[4101]: Accepted password for alice from 10.0.0.5 port 22 ssh2
+Oct  3 12:00:02 web01 sshd[4102]: Failed password for invalid user admin from 203.0.113.7 port 40022 ssh2

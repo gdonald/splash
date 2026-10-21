@@ -65,6 +65,19 @@ pub enum Level {
 }
 
 impl Level {
+    /// The level's name in reports
+    pub fn name(&self) -> &'static str {
+        match self {
+            Level::Trace => "trace",
+            Level::Debug => "debug",
+            Level::Info => "info",
+            Level::Notice => "notice",
+            Level::Warning => "warning",
+            Level::Error => "error",
+            Level::Critical => "critical",
+        }
+    }
+
     /// The level a name such as `WARN`, `err`, or `fatal` stands for
     pub fn from_name(name: &str) -> Option<Level> {
         match name.to_ascii_uppercase().as_str() {

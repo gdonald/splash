@@ -1,0 +1,5 @@
+# Network services
+ssh             22/tcp
+ssh             22/udp
+https           443/tcp
+http-alt        8080/tcp        webcache

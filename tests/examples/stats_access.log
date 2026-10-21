@@ -1,0 +1,6 @@
+10.0.0.5 - alice [03/Oct/2023:12:00:01 +0000] "GET /index.html HTTP/1.1" 200 5120 "-" "curl/8.4.0"
+10.0.0.5 - alice [03/Oct/2023:12:00:03 +0000] "GET /about.html HTTP/1.1" 200 2048 "-" "curl/8.4.0"
+10.0.0.7 - - [03/Oct/2023:12:20:00 +0000] "POST /login HTTP/1.1" 302 0 "https://example.com/" "Mozilla/5.0 (X11; Linux x86_64)"
+10.0.0.9 - - [03/Oct/2023:12:40:00 +0000] "GET /index.html HTTP/1.1" 404 153 "-" "Wget/1.21.4"
+10.0.0.5 - alice [03/Oct/2023:14:05:00 +0000] "GET /index.html HTTP/1.1" 500 618 "-" "curl/8.4.0"
+10.0.0.7 - - [03/Oct/2023:14:10:01 +0000] "DELETE /api/queue/91 HTTP/1.1" 503 0 "-" "python-requests/2.31.0"

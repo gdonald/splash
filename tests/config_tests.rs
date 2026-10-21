@@ -845,3 +845,140 @@ fn an_invalid_configured_keyword_is_reported_when_settings_are_resolved() {
     );
     assert_eq!(error.to_string(), "Unknown keyword color 'loud'");
 }
+
+#[test]
+fn a_config_file_holds_a_lookups_table() {
+    let config = Config::parse("[lookups]\nenabled = true\ndns = false\n", "test.toml").unwrap();
+
+    assert_eq!(
+        config.lookups.into_iter().collect::<Vec<_>>(),
+        vec![
+            ("dns".to_string(), "false".to_string()),
+            ("enabled".to_string(), "true".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn settings_make_the_lookups_the_config_file_turns_on() {
+    let settings = resolve_with(
+        "[lookups]\nenabled = true\nports = false\n",
+        Options::default(),
+    )
+    .unwrap();
+
+    assert_ne!(settings.lookups, splash::lookups::Lookups::none());
+}
+
+#[test]
+fn lookups_on_the_command_line_win_over_the_config_file() {
+    let options = Options {
+        lookups: Some(false),
+        ..Options::default()
+    };
+
+    assert_eq!(
+        resolve_with("[lookups]\nenabled = true\n", options)
+            .unwrap()
+            .lookups,
+        splash::lookups::Lookups::none()
+    );
+}
+
+#[test]
+fn an_invalid_lookups_setting_is_reported_when_settings_are_resolved() {
+    let error = resolve_with("[lookups]\nreverse = true\n", Options::default()).unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::Lookup(splash::lookups::LookupError::UnknownKey(
+            "reverse".to_string()
+        ))
+    );
+    assert_eq!(error.to_string(), "Unknown lookups key 'reverse'");
+}
+
+#[test]
+fn settings_take_the_statistics_options() {
+    let options = Options {
+        stats: splash::stats::StatsOptions {
+            histogram: Some("5m".to_string()),
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+
+    assert_eq!(
+        resolve_with("", options).unwrap().stats.report,
+        splash::stats::Report::Histogram("5m".parse().unwrap())
+    );
+}
+
+#[test]
+fn statistics_write_times_in_the_tz_zone() {
+    let options = Options {
+        stats: splash::stats::StatsOptions {
+            stats: true,
+            ..Default::default()
+        },
+        dates: splash::dates::DateOptions {
+            tz: Some("EST5".to_string()),
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+
+    assert_eq!(
+        resolve_with("", options).unwrap().stats.display,
+        splash::zone::Zone::named("EST5").unwrap()
+    );
+}
+
+#[test]
+fn an_invalid_statistics_option_is_reported() {
+    let options = Options {
+        stats: splash::stats::StatsOptions {
+            histogram: Some("1w".to_string()),
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+    let error = resolve_with("", options).unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::Stats(splash::stats::StatsError::BadBucket("1w".to_string()))
+    );
+    assert!(error
+        .to_string()
+        .starts_with("Invalid histogram period '1w'"));
+}
+
+#[test]
+fn the_curses_viewer_cannot_show_statistics() {
+    let options = Options {
+        output: Some("curses".to_string()),
+        stats: splash::stats::StatsOptions {
+            summary: true,
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+    let error = resolve_with("", options).unwrap_err();
+
+    assert_eq!(error, ConfigError::StatsInViewer);
+    assert_eq!(
+        error.to_string(),
+        "The curses viewer cannot show --stats, --summary, or --histogram"
+    );
+}
+
+#[test]
+fn the_curses_viewer_runs_without_statistics() {
+    let options = Options {
+        output: Some("curses".to_string()),
+        ..Options::default()
+    };
+
+    assert!(resolve_with("", options).is_ok());
+}
