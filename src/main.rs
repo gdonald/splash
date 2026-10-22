@@ -362,8 +362,10 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
     let mut pos = fs::metadata(&path)?.len();
     let mut contents = String::new();
 
-    loop {
+    while !INTERRUPTED.load(Ordering::SeqCst) {
         match rx.recv_timeout(INTERRUPT_POLL) {
+            // inotify reports the open below, which must not trigger another read
+            Ok(Ok(event)) if event.kind.is_access() => {}
             Ok(_) => {
                 let mut f = File::open(&path).unwrap();
                 f.seek(SeekFrom::Start(pos)).unwrap();
@@ -383,15 +385,14 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
                 );
                 print!("{}", progress(settings, &stats));
             }
-            Err(RecvTimeoutError::Timeout) if INTERRUPTED.load(Ordering::SeqCst) => {
-                print!("{}", closing(settings, &stats));
-
-                return Ok(());
-            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(e) => fail(&format!("{:?}", e)),
         }
     }
+
+    print!("{}", closing(settings, &stats));
+
+    Ok(())
 }
 
 #[cfg(unix)]
