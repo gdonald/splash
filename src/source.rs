@@ -300,3 +300,33 @@ pub fn files_in(directory: &Path, recursive: bool) -> io::Result<Vec<PathBuf>> {
 
     Ok(files)
 }
+
+/// The bytes of text splash renders and writes at a time, so a large file
+/// is never held rendered in memory all at once
+pub const CHUNK_BYTES: usize = 1024 * 1024;
+
+/// Splits text into pieces of about `size` bytes, each ending at a line
+/// break, except a last piece the text ends without one, or a line longer
+/// than `size`, which is a piece of its own
+pub fn line_chunks(text: &str, size: usize) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+
+        let end = match rest.len() <= size {
+            true => rest.len(),
+            false => rest[..size]
+                .rfind('\n')
+                .or_else(|| rest[size..].find('\n').map(|found| size + found))
+                .map_or(rest.len(), |found| found + 1),
+        };
+
+        let (chunk, remaining) = rest.split_at(end);
+        rest = remaining;
+
+        Some(chunk)
+    })
+}

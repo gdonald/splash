@@ -152,6 +152,7 @@ pub fn render_lines_with_jobs(
         anonymizer: None,
         source: None,
         plugin_themes: &BTreeMap::new(),
+        line_numbers: false,
     };
 
     renderer
@@ -232,10 +233,11 @@ pub fn render_contents_counted(
 /// The text written before the first line: the header of an output format
 /// that needs one, unless a report replaces the lines
 pub fn opening(settings: &Settings) -> String {
-    match settings
-        .output_mode
-        .header_with_fields(settings.theme_for(&settings.mode), &settings.fields)
-    {
+    match settings.output_mode.header_with_css(
+        settings.theme_for(&settings.mode),
+        &settings.fields,
+        settings.css.as_deref(),
+    ) {
         Some(header) if settings.stats.shows_lines() => header,
         _ => String::new(),
     }
@@ -328,6 +330,7 @@ struct Renderer<'a> {
     anonymizer: Option<&'a Anonymizer>,
     source: Option<&'a str>,
     plugin_themes: &'a BTreeMap<String, Theme>,
+    line_numbers: bool,
 }
 
 impl<'a> Renderer<'a> {
@@ -345,6 +348,7 @@ impl<'a> Renderer<'a> {
             anonymizer: settings.anonymizer.as_ref(),
             source: settings.source.as_deref(),
             plugin_themes: &settings.plugin_themes,
+            line_numbers: settings.line_numbers,
         }
     }
 
@@ -364,11 +368,12 @@ impl<'a> Renderer<'a> {
             ..*self
         };
         let lines: Vec<&str> = contents.lines().collect();
+        let first_number = entry.number_lines(lines.len());
 
         let judged = if jobs <= 1 || lines.len() < PARALLEL_THRESHOLD {
-            renderer.render_slice(&lines)
+            renderer.render_slice(&lines, first_number)
         } else {
-            renderer.render_parallel(&lines, jobs)
+            renderer.render_parallel(&lines, jobs, first_number)
         };
 
         let mut rendered = Vec::new();
@@ -407,13 +412,23 @@ impl<'a> Renderer<'a> {
         parsed
     }
 
-    fn render_parallel<'c>(&self, lines: &[&'c str], jobs: usize) -> Vec<JudgedLine<'c>> {
+    fn render_parallel<'c>(
+        &self,
+        lines: &[&'c str],
+        jobs: usize,
+        first_number: usize,
+    ) -> Vec<JudgedLine<'c>> {
         let per_thread = lines.len().div_ceil(jobs);
 
         thread::scope(|scope| {
             let workers: Vec<thread::ScopedJoinHandle<'_, Vec<JudgedLine<'c>>>> = lines
                 .chunks(per_thread)
-                .map(|chunk| scope.spawn(move || self.render_slice(chunk)))
+                .enumerate()
+                .map(|(index, chunk)| {
+                    let chunk_number = first_number + index * per_thread;
+
+                    scope.spawn(move || self.render_slice(chunk, chunk_number))
+                })
                 .collect();
 
             workers
@@ -425,15 +440,18 @@ impl<'a> Renderer<'a> {
 
     /// Parses, judges, and renders each line. A line that cannot be kept
     /// whatever entry it belongs to is not rendered.
-    fn render_slice<'c>(&self, lines: &[&'c str]) -> Vec<JudgedLine<'c>> {
+    fn render_slice<'c>(&self, lines: &[&'c str], first_number: usize) -> Vec<JudgedLine<'c>> {
         lines
             .iter()
-            .filter_map(|raw| parser::parse_line(raw, self.mode).map(|parsed| (*raw, parsed)))
-            .map(|(raw, parsed)| match self.anonymizer {
-                Some(anonymizer) => (raw, anonymizer.apply(parsed)),
-                None => (raw, parsed),
+            .zip(first_number..)
+            .filter_map(|(raw, number)| {
+                parser::parse_line(raw, self.mode).map(|parsed| (*raw, number, parsed))
             })
-            .map(|(raw, parsed)| {
+            .map(|(raw, number, parsed)| match self.anonymizer {
+                Some(anonymizer) => (raw, number, anonymizer.apply(parsed)),
+                None => (raw, number, parsed),
+            })
+            .map(|(raw, number, parsed)| {
                 let judgement = self.filter.judge(&parsed);
                 let kept = (judgement.matches && judgement.entry != Some(false)).then(|| {
                     let facts = self.stats.collects().then(|| self.stats.facts(&parsed));
@@ -443,11 +461,16 @@ impl<'a> Renderer<'a> {
                             .keywords
                             .apply(self.lookups.apply(self.dates.apply(parsed)));
 
-                        self.output_mode.render_with_fields(
+                        let html = self.output_mode.render_with_fields(
                             &self.label(self.filter.highlight(rewritten)),
                             self.theme,
                             self.fields,
-                        )
+                        );
+
+                        match self.line_numbers {
+                            true => output::number_html_line(number, &html),
+                            false => html,
+                        }
                     } else {
                         String::new()
                     };

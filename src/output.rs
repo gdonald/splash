@@ -336,8 +336,19 @@ impl OutputMode {
     /// Text written before the first line, with the fields `--fields` named,
     /// which give CSV its header row
     pub fn header_with_fields(&self, theme: &Theme, fields: &[String]) -> Option<String> {
+        self.header_with_css(theme, fields, None)
+    }
+
+    /// The header, with a style sheet added to HTML output after the
+    /// theme's rules, so its rules win
+    pub fn header_with_css(
+        &self,
+        theme: &Theme,
+        fields: &[String],
+        css: Option<&str>,
+    ) -> Option<String> {
         match self {
-            OutputMode::Html => Some(html_header(theme)),
+            OutputMode::Html => Some(html_header(theme, css)),
             OutputMode::Csv => Some(format!("{}\n", csv_row(csv_columns(fields)))),
             _ => None,
         }
@@ -384,8 +395,38 @@ impl OutputMode {
 fn render_ansi(line: &ParsedLine<'_>, theme: &Theme) -> String {
     line.tokens
         .iter()
-        .map(|token| theme.colorize(token.kind, &token.text))
+        .map(|token| theme.colorize(token.kind, &visible_controls(&token.text)))
         .collect()
+}
+
+/// Text with its control characters written as text a terminal shows rather
+/// than obeys, so a log line cannot move the cursor, clear the screen, or
+/// set the window title: `^[` for escape and the other C0 controls in caret
+/// notation, `^?` for delete, and `\x9b` for a C1 control. A tab is kept.
+pub fn visible_controls(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(is_hidden_control) {
+        return Cow::Borrowed(text);
+    }
+
+    let mut visible = String::with_capacity(text.len() + 8);
+
+    for character in text.chars() {
+        match character as u32 {
+            _ if !is_hidden_control(character) => visible.push(character),
+            code @ 0..=0x1f => {
+                visible.push('^');
+                visible.push(char::from(code as u8 + 0x40));
+            }
+            0x7f => visible.push_str("^?"),
+            code => visible.push_str(&format!("\\x{:02x}", code)),
+        }
+    }
+
+    Cow::Owned(visible)
+}
+
+fn is_hidden_control(character: char) -> bool {
+    character != '\t' && character.is_control()
 }
 
 fn render_html(line: &ParsedLine<'_>) -> String {
@@ -632,7 +673,18 @@ pub fn escape_json(text: &str) -> String {
     escaped
 }
 
-fn html_header(theme: &Theme) -> String {
+/// The class of the line number HTML output can start each line with
+pub const LINE_NUMBER_CLASS: &str = "splash-line-number";
+
+/// A line of HTML output after its line number
+pub fn number_html_line(number: usize, html: &str) -> String {
+    format!(
+        "<span class=\"{}\">{}</span>{}",
+        LINE_NUMBER_CLASS, number, html
+    )
+}
+
+fn html_header(theme: &Theme, css: Option<&str>) -> String {
     let rules: String = TokenKind::all()
         .iter()
         .map(|kind| {
@@ -660,6 +712,8 @@ fn html_header(theme: &Theme) -> String {
          <style>\n\
          \x20   body {{ background: {}; color: {}; }}\n\
          \x20   pre.splash {{ font-family: monospace; white-space: pre-wrap; }}\n\
+         \x20   .{} {{ display: inline-block; min-width: 6ch; margin-right: 1ch; text-align: right; opacity: 0.6; user-select: none; }}\n\
+         {}\
          {}\
          </style>\n\
          </head>\n\
@@ -667,8 +721,19 @@ fn html_header(theme: &Theme) -> String {
          <pre class=\"splash\">\n",
         theme.background().css(),
         theme.foreground().css(),
-        rules
+        LINE_NUMBER_CLASS,
+        rules,
+        css.map(custom_css).unwrap_or_default()
     )
+}
+
+/// A style sheet as it goes inside the header's style element, ending with
+/// a line break
+fn custom_css(css: &str) -> String {
+    match css.ends_with('\n') {
+        true => css.to_string(),
+        false => format!("{}\n", css),
+    }
 }
 
 fn html_footer() -> String {

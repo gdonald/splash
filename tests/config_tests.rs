@@ -1165,3 +1165,75 @@ fn colors_configured_under_a_mode_alias_apply_to_the_mode() {
         Style::new(Color::Red)
     );
 }
+
+fn html_options(output: &str) -> Options {
+    Options {
+        output: Some(output.to_string()),
+        ..Options::default()
+    }
+}
+
+#[test]
+fn a_style_sheet_is_read_into_the_settings() {
+    let home = TempDir::new().unwrap();
+    let css = write(home.path(), "site.css", "pre.splash { font-size: 14px; }\n");
+    let options = Options {
+        css: Some(css),
+        ..html_options("html")
+    };
+
+    let resolved = settings(options, &Config::default()).unwrap();
+
+    assert_eq!(
+        resolved.css.as_deref(),
+        Some("pre.splash { font-size: 14px; }\n")
+    );
+}
+
+#[test]
+fn a_style_sheet_that_cannot_be_read_is_an_error() {
+    let options = Options {
+        css: Some(PathBuf::from("missing/site.css")),
+        ..html_options("html")
+    };
+
+    let error = settings(options, &Config::default()).unwrap_err();
+
+    assert!(error
+        .to_string()
+        .starts_with("Could not read missing/site.css: "));
+}
+
+#[test]
+fn a_style_sheet_needs_html_output() {
+    let options = Options {
+        css: Some(PathBuf::from("site.css")),
+        ..html_options("ansi")
+    };
+
+    let error = settings(options, &Config::default()).unwrap_err();
+
+    assert_eq!(error, ConfigError::NeedsHtml("--css"));
+    assert_eq!(error.to_string(), "--css works only with --output html");
+}
+
+#[test]
+fn line_numbers_need_html_output() {
+    let options = Options {
+        line_numbers: true,
+        ..html_options("plain")
+    };
+
+    assert_eq!(
+        settings(options, &Config::default()),
+        Err(ConfigError::NeedsHtml("--line-numbers"))
+    );
+}
+
+#[test]
+fn line_numbers_are_off_unless_asked_for() {
+    let resolved = settings(html_options("html"), &Config::default()).unwrap();
+
+    assert!(!resolved.line_numbers);
+    assert_eq!(resolved.css, None);
+}

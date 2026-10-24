@@ -144,6 +144,14 @@ struct Args {
     #[arg(short, long)]
     output: Option<String>,
 
+    /// A style sheet to add to HTML output after the theme's rules
+    #[arg(long, value_name = "FILE")]
+    css: Option<String>,
+
+    /// Start each line of HTML output with its line number in the input
+    #[arg(long)]
+    line_numbers: bool,
+
     /// Fields csv and jsonl output write, as FIELD,FIELD (repeatable)
     #[arg(long, value_name = "FIELDS")]
     fields: Vec<String>,
@@ -204,7 +212,7 @@ struct Args {
     #[arg(long, value_name = "NAME")]
     disable_plugin: Vec<String>,
 
-    /// Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
+    /// Keep only lines at these levels, as LEVEL,LEVEL, or drop a level written !LEVEL (repeatable)
     #[arg(long, value_name = "LEVELS")]
     level: Vec<String>,
 
@@ -224,7 +232,7 @@ struct Args {
     #[arg(long, value_name = "PATTERN")]
     exclude: Vec<String>,
 
-    /// Keep only lines holding a field with this value, as KEY=VALUE (repeatable)
+    /// Keep only lines holding a field with this value, as KEY=VALUE, or not, as KEY!=VALUE (repeatable)
     #[arg(long, value_name = "KEY=VALUE")]
     filter: Vec<String>,
 
@@ -361,6 +369,8 @@ fn main() {
         },
         fields: args.fields,
         anonymize: args.anonymize,
+        css: args.css.map(PathBuf::from),
+        line_numbers: args.line_numbers,
         stats: StatsOptions {
             stats: args.stats,
             summary: args.summary,
@@ -498,8 +508,11 @@ fn run(input: &Input, settings: &Settings, label: bool) {
             let mut stats = Stats::default();
 
             if mode == detect::AUTO {
-                let sample: Vec<String> = lines.by_ref().take(detect::SAMPLE_SIZE).collect();
-                let sample = sample.join("\n");
+                let sample: String = lines
+                    .by_ref()
+                    .take(detect::SAMPLE_SIZE)
+                    .map(|line| line + "\n")
+                    .collect();
 
                 settings.mode = detect::resolve_mode(mode, &sample);
                 let kept = rate_limited(&sample);
@@ -510,6 +523,7 @@ fn run(input: &Input, settings: &Settings, label: bool) {
             }
 
             for line in lines {
+                let line = line + "\n";
                 let kept = rate_limited(&line);
 
                 emit(&render_contents_counted(
@@ -795,7 +809,12 @@ fn render_paths(
     } else {
         for (index, file) in files.iter_mut().enumerate() {
             headers.show(index, &file.path, settings);
-            write_rendered(complete[index], &file.settings, &mut file.entry, &mut stats);
+
+            for chunk in source::line_chunks(complete[index], source::CHUNK_BYTES) {
+                write_lines(chunk, &file.settings, &mut file.entry, &mut stats);
+            }
+
+            emit(&progress(settings, &stats));
         }
     }
 
@@ -871,11 +890,10 @@ fn render_received(
         let arrived: Vec<Received> = std::iter::once(first).chain(lines.try_iter()).collect();
 
         for group in arrived.chunk_by(|one, next| one.sender == next.sender) {
-            let text: Vec<&str> = group
+            let text: String = group
                 .iter()
-                .map(|received| received.line.as_str())
+                .map(|received| format!("{}\n", received.line))
                 .collect();
-            let text = text.join("\n");
 
             settings.mode = detect::resolve_mode(&settings.mode, &text);
 

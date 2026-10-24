@@ -11,7 +11,10 @@ use crate::output::{ParsedLine, TokenKind};
 use crate::parser;
 use crate::plugin::ParseResult;
 use crate::registry;
+use crate::syslog;
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 /// The mode name that asks splash to detect the format
 pub const AUTO: &str = "auto";
@@ -38,6 +41,8 @@ pub struct Detection {
     pub mode: String,
     /// The sample lines the mode reads as its own format
     pub matched: usize,
+    /// The parsed lines in which the mode found a timestamp
+    pub timestamps: usize,
     /// The fields the mode picked out of the lines it parsed
     pub fields: usize,
     /// The share of the sample the mode reads, from 0.0 to 1.0
@@ -71,6 +76,7 @@ pub fn score_mode(mode: &str, lines: &[&str]) -> Detection {
     Detection {
         mode: mode.to_string(),
         matched: (confidence * lines.len() as f32).round() as usize,
+        timestamps: parsed.iter().filter(|line| has_timestamp(line)).count(),
         fields: parsed.iter().map(field_count).sum(),
         confidence,
     }
@@ -79,7 +85,8 @@ pub fn score_mode(mode: &str, lines: &[&str]) -> Detection {
 /// Scores every candidate mode against a sample, best first.
 ///
 /// Modes are ranked by the lines they read, then a syslog family mode below
-/// any other, then by the fields they picked out, then by name.
+/// any other, then by the lines they found a timestamp in, then by the fields
+/// they picked out, then by name.
 pub fn rank(sample: &[&str]) -> Vec<Detection> {
     let lines: Vec<&str> = sample
         .iter()
@@ -101,8 +108,15 @@ fn compare(left: &Detection, right: &Detection) -> Ordering {
         .matched
         .cmp(&left.matched)
         .then_with(|| is_syslog_family(&left.mode).cmp(&is_syslog_family(&right.mode)))
+        .then_with(|| right.timestamps.cmp(&left.timestamps))
         .then_with(|| right.fields.cmp(&left.fields))
         .then_with(|| left.mode.cmp(&right.mode))
+}
+
+fn has_timestamp(line: &ParsedLine) -> bool {
+    line.tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::Timestamp)
 }
 
 fn is_syslog_family(mode: &str) -> bool {
@@ -158,7 +172,17 @@ pub fn parse_auto_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> 
         return None;
     }
 
-    if let Some(parsed) = detected_mode(mode).and_then(|detected| parse_as(detected, line)) {
+    let detected = detected_mode(mode);
+
+    if let Some(parsed) = detected
+        .filter(|detected| is_syslog_family(detected))
+        .and_then(|_| program_mode(line))
+        .and_then(|program_mode| parse_as(&program_mode, line))
+    {
+        return Some(parsed);
+    }
+
+    if let Some(parsed) = detected.and_then(|detected| parse_as(detected, line)) {
         return Some(parsed);
     }
 
@@ -169,6 +193,35 @@ pub fn parse_auto_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> 
 }
 
 /// Parses a line with one mode, or `None` when the mode does not read it
+/// The mode chosen for each program a syslog line names, so each program is
+/// detected once
+static PROGRAM_MODES: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The mode of the program that wrote a syslog line, other than a syslog
+/// family mode, as detection chose it from the first line of the program
+/// it saw, or `None` when only a syslog family mode reads that line
+pub fn program_mode(line: &str) -> Option<String> {
+    let program = syslog::split_header(line)?.program;
+    let mut modes = PROGRAM_MODES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    modes
+        .entry(program.to_string())
+        .or_insert_with(|| {
+            detect(&[line])
+                .map(|detection| detection.mode)
+                .filter(|mode| !is_syslog_family(mode))
+        })
+        .clone()
+}
+
+/// Forgets the mode chosen for each program, for when the plugins change
+pub fn forget_program_modes() {
+    PROGRAM_MODES.lock().unwrap().clear();
+}
+
 pub fn parse_as<'a>(mode: &str, line: &'a str) -> Option<ParsedLine<'a>> {
     match mode {
         CLF => parser::parse_clf_line(line),

@@ -1,0 +1,6 @@
+/* A style sheet for splash --output html --css report.css. Its rules come
+   after the theme's, so they win. */
+body { margin: 2rem; }
+pre.splash { font-size: 13px; line-height: 1.4; }
+.splash-status { font-weight: bold; }
+.splash-line-number { opacity: 0.4; }

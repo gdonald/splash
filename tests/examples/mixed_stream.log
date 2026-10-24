@@ -1,0 +1,7 @@
+10.0.0.5 - alice [03/Oct/2023:12:00:01 +0000] "GET /orders HTTP/1.1" 200 612
+{"level":"info","ts":1696334401.52,"logger":"http.log.access","msg":"handled request","status":200}
+Oct  3 12:00:02 web01 sshd[4101]: Accepted publickey for alice from 10.0.0.5 port 52144 ssh2
+2023/10/03 12:00:03 [error] 1234#5678: *42 open() "/usr/share/nginx/html/favicon.ico" failed (2: No such file or directory), client: 10.0.0.5, server: example.com, request: "GET /favicon.ico HTTP/1.1", host: "example.com"
+2023-10-03 12:00:04.123 UTC [1234] ERROR:  relation "orders" does not exist
+the maintenance window moves to 02:00
+E1003 12:00:05.123456       1 reflector.go:138] failed to list *v1.Pod: connection refused

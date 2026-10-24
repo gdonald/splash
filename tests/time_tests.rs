@@ -343,3 +343,118 @@ fn a_moment_is_written_relative_to_now_in_its_largest_unit() {
         assert_eq!(format_relative(moment, NOW), expected);
     }
 }
+
+#[test]
+fn an_rfc_3339_timestamp_may_use_a_lowercase_t_and_z() {
+    assert_eq!(utc("2023-10-03t12:00:01z"), Some(OCTOBER_THIRD));
+}
+
+#[test]
+fn an_offset_may_be_written_in_hours_alone() {
+    assert_eq!(utc("2023-10-03T17:00:01+05"), Some(OCTOBER_THIRD));
+    assert_eq!(utc("2023-10-03T07:00:01-05"), Some(OCTOBER_THIRD));
+}
+
+#[test]
+fn an_offset_of_zero_is_read_with_either_sign() {
+    assert_eq!(utc("2023-10-03T12:00:01+00:00"), Some(OCTOBER_THIRD));
+    assert_eq!(utc("2023-10-03T12:00:01-00:00"), Some(OCTOBER_THIRD));
+}
+
+#[test]
+fn an_offset_beyond_a_day_is_not_read() {
+    assert_eq!(utc("2023-10-03T12:00:01+25:00"), None);
+    assert_eq!(utc("2023-10-03T12:00:01+05:60"), None);
+}
+
+#[test]
+fn an_iso_timestamp_in_the_basic_form_is_read() {
+    assert_eq!(utc("20231003T120001Z"), Some(OCTOBER_THIRD));
+    assert_eq!(utc("20231003t170001.5+0500"), Some(OCTOBER_THIRD));
+    assert_eq!(
+        parse_timestamp("20231003T070001", &central(), NOW),
+        Some(OCTOBER_THIRD)
+    );
+}
+
+#[test]
+fn a_fraction_of_any_length_after_a_dot_or_a_comma_is_read() {
+    assert_eq!(utc("2023-10-03T12:00:01.1Z"), Some(OCTOBER_THIRD));
+    assert_eq!(utc("2023-10-03T12:00:01,5Z"), Some(OCTOBER_THIRD));
+}
+
+#[test]
+fn a_leap_second_is_read_as_the_second_after_it() {
+    assert_eq!(utc("2016-12-31T23:59:60Z"), Some(1_483_228_800));
+}
+
+#[test]
+fn a_time_out_of_range_is_not_read() {
+    for text in [
+        "2023-02-29T12:00:00Z",
+        "2023-10-03T24:00:00Z",
+        "2023-10-03T12:60:00Z",
+    ] {
+        assert_eq!(utc(text), None, "read '{}'", text);
+    }
+}
+
+#[test]
+fn timestamps_before_the_epoch_are_read() {
+    assert_eq!(utc("1969-12-31T23:59:59Z"), Some(-1));
+    assert_eq!(utc("0001-01-01T00:00:00Z"), Some(-62_135_596_800));
+}
+
+#[test]
+fn microseconds_and_nanoseconds_since_the_epoch_are_read() {
+    assert_eq!(utc("1696334401123456"), Some(OCTOBER_THIRD));
+    assert_eq!(utc("1696334401123456789"), Some(OCTOBER_THIRD));
+}
+
+#[test]
+fn a_count_of_digits_that_is_no_epoch_unit_is_not_read() {
+    for text in ["16963344011", "16963344011234", "169633440112345678"] {
+        assert_eq!(utc(text), None, "read '{}'", text);
+    }
+}
+
+#[test]
+fn microsecond_and_nanosecond_epoch_timestamps_are_recognized() {
+    assert!(splash::time::is_epoch("1696334401123456"));
+    assert!(splash::time::is_epoch("1696334401123456789"));
+}
+
+#[test]
+fn a_moment_is_written_with_the_offset_in_force_at_it() {
+    use splash::time::format_rfc3339;
+
+    let january_third = OCTOBER_THIRD - 273 * SECONDS_PER_DAY;
+
+    assert_eq!(
+        format_rfc3339(january_third, None, &central()),
+        "2023-01-03T06:00:01-06:00"
+    );
+    assert_eq!(
+        format_rfc3339(OCTOBER_THIRD, None, &central()),
+        "2023-10-03T07:00:01-05:00"
+    );
+}
+
+#[test]
+fn a_relative_time_stays_in_a_unit_until_a_whole_larger_unit_has_passed() {
+    use splash::time::format_relative;
+
+    let cases = [
+        (NOW - 59, "59 seconds ago"),
+        (NOW - (HOUR - 1), "59 minutes ago"),
+        (NOW - (SECONDS_PER_DAY - 1), "23 hours ago"),
+        (NOW - 364 * SECONDS_PER_DAY, "364 days ago"),
+        (NOW - 365 * SECONDS_PER_DAY, "1 year ago"),
+        (NOW + 2 * SECONDS_PER_DAY, "in 2 days"),
+        (NOW + 1, "in 1 second"),
+    ];
+
+    for (moment, expected) in cases {
+        assert_eq!(format_relative(moment, NOW), expected);
+    }
+}

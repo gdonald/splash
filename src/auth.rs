@@ -72,6 +72,33 @@ static WORDS: LazyLock<Words> = LazyLock::new(|| {
     ])
 });
 
+/// The programs that write auth.log, whose lines detection counts as this
+/// format. Other programs' syslog lines are read too, but they say nothing
+/// about the log being auth.log.
+pub const AUTH_PROGRAMS: [&str; 16] = [
+    "CRON",
+    "chpasswd",
+    "groupadd",
+    "login",
+    "passwd",
+    "pkexec",
+    "polkitd",
+    "sshd",
+    "sshd-session",
+    "su",
+    "sudo",
+    "systemd-logind",
+    "unix_chkpwd",
+    "useradd",
+    "userdel",
+    "usermod",
+];
+
+/// Whether a line is a syslog line one of the `AUTH_PROGRAMS` wrote
+pub fn is_auth_line(line: &str) -> bool {
+    syslog::split_header(line).is_some_and(|header| AUTH_PROGRAMS.contains(&header.program))
+}
+
 /// The auth.log plugin
 pub struct AuthPlugin {
     metadata: PluginMetadata,
@@ -106,6 +133,20 @@ impl Plugin for AuthPlugin {
             Some(parsed) => ParseResult::Parsed(parsed),
             None => ParseResult::NoMatch,
         }
+    }
+
+    /// The share of the sample the `AUTH_PROGRAMS` wrote
+    fn detect_format(&self, sample_lines: &[&str]) -> f32 {
+        if sample_lines.is_empty() {
+            return 0.0;
+        }
+
+        let written = sample_lines
+            .iter()
+            .filter(|line| is_auth_line(line))
+            .count();
+
+        written as f32 / sample_lines.len() as f32
     }
 }
 

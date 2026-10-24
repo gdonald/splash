@@ -220,3 +220,42 @@ fn tokens_that_are_not_timestamps_are_left_alone() {
 fn building_at_a_clock_with_no_options_selects_nothing() {
     assert_eq!(rewrite(DateOptions::default()).selection, Selection::None);
 }
+
+#[test]
+fn a_zone_writes_a_syslog_timestamp_with_its_year_and_offset() {
+    let options = DateOptions {
+        tz: Some("UTC".to_string()),
+        ..DateOptions::default()
+    };
+
+    assert_eq!(
+        rewritten(&rewrite(options), "Oct  3 07:00:01"),
+        "2023-10-03T12:00:01Z connect from 10.0.0.5"
+    );
+}
+
+#[test]
+fn a_zone_keeps_the_fraction_of_a_second() {
+    let options = DateOptions {
+        tz: Some("UTC".to_string()),
+        ..DateOptions::default()
+    };
+
+    assert_eq!(
+        rewritten(&rewrite(options), "2023-10-03T07:00:01.123456-05:00"),
+        "2023-10-03T12:00:01.123456Z connect from 10.0.0.5"
+    );
+}
+
+#[test]
+fn a_relative_time_in_the_future_is_written_ahead_of_now() {
+    let options = DateOptions {
+        relative: true,
+        ..DateOptions::default()
+    };
+
+    assert_eq!(
+        rewritten(&rewrite(options), "2023-10-03T15:00:01Z"),
+        "in 1 hour connect from 10.0.0.5"
+    );
+}

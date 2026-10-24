@@ -66,6 +66,8 @@ fn plain_settings() -> Settings {
         anonymizer: None,
         source: None,
         plugin_themes: Default::default(),
+        css: None,
+        line_numbers: false,
     }
 }
 

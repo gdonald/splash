@@ -44,6 +44,7 @@ pub enum ConfigError {
     Lookup(LookupError),
     Stats(StatsError),
     StatsInViewer,
+    NeedsHtml(&'static str),
     UnknownField(String),
     BadEnabled { plugin: String, value: String },
 }
@@ -84,6 +85,9 @@ impl fmt::Display for ConfigError {
             ),
             ConfigError::Lookup(error) => write!(f, "{}", error),
             ConfigError::Stats(error) => write!(f, "{}", error),
+            ConfigError::NeedsHtml(option) => {
+                write!(f, "{} works only with --output html", option)
+            }
             ConfigError::StatsInViewer => write!(
                 f,
                 "The curses viewer cannot show --stats, --summary, or --histogram"
@@ -408,6 +412,10 @@ pub struct Options {
     /// The fields csv and jsonl output write, as FIELD,FIELD values
     pub fields: Vec<String>,
     pub anonymize: bool,
+    /// A style sheet to add to HTML output after the theme's rules
+    pub css: Option<PathBuf>,
+    /// Start each line of HTML output with its line number
+    pub line_numbers: bool,
 }
 
 /// The parsing mode, output format, and theme splash will run with
@@ -432,6 +440,10 @@ pub struct Settings {
     /// The theme of each plugin the config sets colors for, used in place
     /// of `theme` when that plugin's mode is chosen or detected
     pub plugin_themes: BTreeMap<String, Theme>,
+    /// The style sheet `--css` names, added to HTML output
+    pub css: Option<String>,
+    /// Whether each line of HTML output starts with its line number
+    pub line_numbers: bool,
 }
 
 /// Mode used when neither the command line nor the config file names one
@@ -505,6 +517,18 @@ impl Settings {
             return Err(ConfigError::StatsInViewer);
         }
 
+        if output_mode != OutputMode::Html {
+            if options.css.is_some() {
+                return Err(ConfigError::NeedsHtml("--css"));
+            }
+
+            if options.line_numbers {
+                return Err(ConfigError::NeedsHtml("--line-numbers"));
+            }
+        }
+
+        let css = options.css.as_deref().map(read_file).transpose()?;
+
         Ok(Settings {
             mode,
             output_mode,
@@ -519,6 +543,8 @@ impl Settings {
             anonymizer: options.anonymize.then(Anonymizer::new),
             source: None,
             plugin_themes,
+            css,
+            line_numbers: options.line_numbers,
         })
     }
 

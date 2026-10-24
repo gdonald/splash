@@ -564,3 +564,59 @@ fn the_closing_after_a_report_has_no_footer() {
         ""
     );
 }
+
+fn numbered(jobs: usize) -> Settings {
+    let options = Options {
+        mode: Some("ad-hoc".to_string()),
+        output: Some("html".to_string()),
+        jobs: Some(jobs),
+        line_numbers: true,
+        no_wordcolor: true,
+        ..Options::default()
+    };
+
+    Settings::resolve(
+        &options,
+        &Config::default(),
+        &Profiles::new(std::path::PathBuf::from("unused")),
+    )
+    .unwrap()
+}
+
+fn line_numbers(rendered: &str) -> Vec<usize> {
+    rendered
+        .lines()
+        .map(|line| {
+            line.strip_prefix("<span class=\"splash-line-number\">")
+                .and_then(|rest| rest.split_once('<'))
+                .map(|(number, _)| number.parse().unwrap())
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn line_numbers_count_blank_lines_and_carry_from_one_chunk_to_the_next() {
+    let settings = numbered(1);
+    let mut entry = Entry::default();
+
+    let first = render_contents_settings("alpha\n\nbeta\n", &settings, &mut entry);
+    let second = render_contents_settings("gamma\n", &settings, &mut entry);
+
+    assert_eq!(line_numbers(&first), [1, 3]);
+    assert_eq!(line_numbers(&second), [4]);
+}
+
+#[test]
+fn line_numbers_follow_the_input_across_worker_threads() {
+    let contents: String = (1..=PARALLEL_THRESHOLD * 2)
+        .map(|number| format!("line {}\n", number))
+        .collect();
+
+    let rendered = render_contents_settings(&contents, &numbered(4), &mut Entry::default());
+
+    assert_eq!(
+        line_numbers(&rendered),
+        (1..=PARALLEL_THRESHOLD * 2).collect::<Vec<_>>()
+    );
+}

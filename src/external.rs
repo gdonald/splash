@@ -16,6 +16,7 @@
 //!
 //! The patterns are tried in file order, and the first that matches reads
 //! the line.
+use crate::detect;
 use crate::discovery::PluginDiscovery;
 use crate::output::{ParsedLine, Token, TokenKind};
 use crate::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
@@ -414,6 +415,8 @@ impl PluginSet {
                 Err(error) => failures.push(failure(path, &error)),
             }
         }
+
+        detect::forget_program_modes();
 
         while !pending.is_empty() {
             let waiting_names: HashSet<String> = pending

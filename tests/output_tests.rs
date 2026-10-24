@@ -542,3 +542,90 @@ fn plain_output_writes_a_merged_lines_label() {
         "api.log ready"
     );
 }
+
+#[test]
+fn a_style_sheet_is_added_to_the_html_header_after_the_theme_rules() {
+    let header = OutputMode::Html
+        .header_with_css(
+            &Theme::default(),
+            &[],
+            Some("pre.splash { font-size: 14px; }"),
+        )
+        .unwrap();
+
+    assert!(header.ends_with(
+        "    .splash-source { color: #0000aa; font-weight: bold; }\npre.splash { font-size: 14px; }\n</style>\n</head>\n<body>\n<pre class=\"splash\">\n"
+    ), "{}", header);
+}
+
+#[test]
+fn a_style_sheet_that_ends_with_a_line_break_is_added_as_written() {
+    let header = OutputMode::Html
+        .header_with_css(&Theme::default(), &[], Some("a { color: red; }\n"))
+        .unwrap();
+
+    assert!(
+        header.contains("\na { color: red; }\n</style>\n"),
+        "{}",
+        header
+    );
+}
+
+#[test]
+fn a_style_sheet_is_not_added_to_output_without_a_header() {
+    assert_eq!(
+        OutputMode::Plain.header_with_css(&Theme::default(), &[], Some("a { color: red; }")),
+        None
+    );
+}
+
+#[test]
+fn the_html_header_styles_line_numbers_so_copying_leaves_them_out() {
+    let header = OutputMode::Html.header(&Theme::default()).unwrap();
+
+    assert!(header.contains(
+        "    .splash-line-number { display: inline-block; min-width: 6ch; margin-right: 1ch; text-align: right; opacity: 0.6; user-select: none; }\n"
+    ));
+}
+
+#[test]
+fn a_numbered_html_line_starts_with_its_number() {
+    assert_eq!(
+        output::number_html_line(42, "<span class=\"splash-plain\">a</span>"),
+        "<span class=\"splash-line-number\">42</span><span class=\"splash-plain\">a</span>"
+    );
+}
+
+#[test]
+fn control_characters_are_written_in_caret_notation() {
+    assert_eq!(
+        output::visible_controls("a\u{1b}[2J\u{7}\r\u{0}\u{7f}b"),
+        "a^[[2J^G^M^@^?b"
+    );
+}
+
+#[test]
+fn a_c1_control_is_written_as_its_hex_code() {
+    assert_eq!(output::visible_controls("a\u{9b}31m"), "a\\x9b31m");
+}
+
+#[test]
+fn text_without_control_characters_is_borrowed_as_it_is() {
+    assert!(matches!(
+        output::visible_controls("tab\tand é"),
+        std::borrow::Cow::Borrowed("tab\tand é")
+    ));
+}
+
+#[test]
+fn ansi_output_shows_an_escape_sequence_in_a_line_instead_of_sending_it() {
+    let parsed = ParsedLine::new(vec![Token::new(
+        "title \u{1b}]0;owned\u{7}",
+        TokenKind::Message,
+    )]);
+
+    let rendered = OutputMode::Ansi.render(&parsed, &Theme::default());
+
+    assert!(rendered.contains("title ^[]0;owned^G"), "{:?}", rendered);
+    assert!(!rendered.contains("\u{7}"));
+}

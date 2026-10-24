@@ -145,6 +145,9 @@ Options:
   -o, --output <OUTPUT>                  Output format (ansi, csv, curses, html, json, jsonl, plain)
       --fields <FIELDS>                  Fields csv and jsonl output write, as FIELD,FIELD
                                          (repeatable)
+      --css <FILE>                       A style sheet to add to HTML output after the theme's rules
+      --line-numbers                     Start each line of HTML output with its line number in the
+                                         input
   -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
                                          core)
       --config <CONFIG>                  Config file to read instead of ~/.splash/config.toml or
@@ -163,7 +166,8 @@ Options:
       --plugin <NAME>                    Read the input with this plugin, as --mode does
       --disable-plugin <NAME>            Leave a plugin out of auto detection and refuse its mode
                                          (repeatable)
-      --level <LEVELS>                   Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
+      --level <LEVELS>                   Keep only lines at these levels, as LEVEL,LEVEL, or drop a
+                                         level written !LEVEL (repeatable)
       --since <TIME>                     Keep only lines written at or after this time, such as 2h
                                          ago or 2024-01-01
       --until <TIME>                     Keep only lines written at or before this time
@@ -171,7 +175,7 @@ Options:
                                          match (repeatable)
       --exclude <PATTERN>                Drop lines matching this pattern (repeatable)
       --filter <KEY=VALUE>               Keep only lines holding a field with this value, as
-                                         KEY=VALUE (repeatable)
+                                         KEY=VALUE, or not, as KEY!=VALUE (repeatable)
       --anonymize                        Mask IP addresses, email addresses, and user names
       --convert-date                     Rewrite timestamps written as seconds since the epoch as
                                          dates
@@ -527,6 +531,9 @@ splash --mode httpd --exclude /healthz --path /var/log/nginx/access.log
 
 # One client's requests that failed
 splash --mode httpd --filter ip=10.0.0.5 --filter status=500 --path /var/log/nginx/access.log
+
+# Every request that did not succeed, and every level but debug
+splash --mode httpd --filter 'status!=200' --level '!debug' --path /var/log/nginx/access.log
 ```
 
 ### Levels
@@ -534,7 +541,9 @@ splash --mode httpd --filter ip=10.0.0.5 --filter status=500 --path /var/log/ngi
 `--level` takes a comma-separated list and can be repeated. The levels are `trace`, `debug`,
 `info`, `notice`, `warn` (or `warning`), `error` (or `err`), and `critical`, which also covers
 `crit`, `fatal`, `alert`, `emerg`, and `panic`. Names are case-insensitive, and a level matches
-only itself, so `--level error` does not include `critical`.
+only itself, so `--level error` does not include `critical`. A level written `!LEVEL` is dropped instead:
+`--level '!debug,!trace'` keeps every other level, and lines with a timestamp but no level too.
+Listed and dropped levels combine, so `--level warn,error,!error` keeps only warnings.
 
 A line's level is its first level field, such as `[ERROR]`, PostgreSQL's `LOG`, MongoDB's `I`, or
 Redis's `#`. A line with no level field takes the first word in it that names a level.
@@ -546,10 +555,12 @@ Redis's `#`. A line with no level field takes the first word in it that names a 
 as `90s ago`, `30 minutes ago`, `2h ago`, `3 days ago`, or `1w ago`. Both ends are inclusive.
 
 Log timestamps are read in these forms: RFC 3339 and ISO 8601 (`2023-10-03T12:00:01.123Z`, with a
-space instead of `T`, a comma before the fraction, or `/` between the date parts), the Common Log
+space instead of `T`, a lowercase `t` or `z`, a comma before the fraction, `/` between the date
+parts, an offset in hours alone such as `+05`, or the basic form `20231003T120001Z`), the Common Log
 Format's `10/Oct/2000:13:55:36 -0700`, `03-Oct-2023 12:00:01 UTC`, `03 Oct 2023 12:00:00.001`,
 syslog's `Oct  3 12:00:01`, `ctime`'s `Tue Oct  3 12:00:01 2023`, klog's `1003 12:00:01.123456`,
-and seconds or milliseconds since the epoch. A timestamp with no zone is read in the local zone,
+and seconds, milliseconds, microseconds, or nanoseconds since the epoch. An offset beyond 23 hours
+and 59 minutes is not read, and a leap second such as `23:59:60` is read as the second after it. A timestamp with no zone is read in the local zone,
 which comes from `TZ` or `/etc/localtime`. A timestamp with no year is placed in the latest year
 that does not put it more than a day in the future.
 
@@ -568,7 +579,8 @@ match=COLOR` and `--color capture=COLOR` change (see [Color overrides](#color-ov
 
 `--filter KEY=VALUE` keeps lines holding a field of that kind with exactly that value. The key is a
 color key, such as `status`, `host`, `userid`, or `method`. `ip` matches both an IP address and an
-access log's client address. Repeated `--filter` options must all match.
+access log's client address. `--filter KEY!=VALUE` keeps the lines not holding that field value,
+including lines without the field. Repeated `--filter` options must all match.
 
 ---
 
@@ -919,10 +931,20 @@ journalctl -f | splash --auto
 ```
 
 Each mode's confidence is the share of the sample lines it reads as its own format. Modes are
-ranked by the lines they read, then by the fields they pick out of those lines, so `nginx-error`
-wins over `httpd` on an nginx error log. `syslog`, `journalctl`, and `auth` read any line behind a
-syslog header, so one of them is chosen only when no program's own mode, such as `postfix` or
-`ssh`, reads at least half of the sample.
+ranked by the lines they read, then by the lines they find a timestamp in, then by the fields they
+pick out of those lines, so `nginx-error` wins over `httpd` on an nginx error log, and a mode that
+finds the time of a JSON line wins over one that only finds its other fields. `syslog`,
+`journalctl`, and `auth` read any line behind a syslog header, so one of them is chosen only when
+no program's own mode, such as `postfix` or `ssh`, reads at least half of the sample.
+
+Among those three, `auth` counts only the lines of the programs that write auth.log, such as sshd,
+sudo, su, CRON, and systemd-logind. `journalctl` counts the sample only when a line is in a form
+journalctl writes and syslog daemons do not: a day of the month padded with a zero (`Oct 03`), a
+time with microseconds after a month name, an ISO 8601 offset without a colon (`+0000`), a
+monotonic or Unix time, or a marker such as `-- Boot ... --`. A syslog file is read in `syslog`
+mode. When one of the three is chosen, a program with a mode of its own has its lines read with
+that mode, so in a multi-service syslog the sshd lines are colored by `ssh` and the postfix lines
+by `postfix`. The mode for each program is chosen from the first line of it splash reads.
 
 The input can mix formats. A line the chosen mode does not read is detected on its own, and a line
 no mode reads is rendered in ad-hoc mode. When no mode reads half of the sample, every line is
@@ -1981,6 +2003,12 @@ Every parsing mode can be written out in seven formats, selected with `--output`
 
 ANSI escape sequences for a color terminal. This is the default.
 
+Control characters in a log line are written as text the terminal shows rather than obeys, so a
+line cannot move the cursor, clear the screen, or set the window title: escape and the other C0
+controls in caret notation (`^[`, `^G`, `^M`), delete as `^?`, and a C1 control as its hex code
+(`\x9b`). Tabs are kept. The curses viewer shows lines the same way. Plain output writes the
+characters as the log holds them.
+
 ```bash
 splash --mode clf --path access.log
 ```
@@ -2036,6 +2064,20 @@ by editing the CSS.
 cat access.log | splash --mode clf --output html > access.html
 ```
 
+`--css FILE` adds a style sheet to the document's `<style>` element after the theme's rules, so
+its rules win. [`examples/html/report.css`](examples/html/report.css) is a starting point.
+
+`--line-numbers` starts each line with its line number in the input, in a `splash-line-number`
+span. Blank lines and lines a filter drops are counted, so the numbers match the file, but lines
+`--rate-limit` drops are not. The numbers cannot be selected, so copying text from the page leaves
+them out.
+
+```bash
+splash --mode httpd --path access.log --output html --css report.css --line-numbers > access.html
+```
+
+Both options need `--output html`.
+
 ### json
 
 One JSON object per line, holding the line text and the styled tokens it was split into.
@@ -2062,7 +2104,12 @@ object, as Caddy, MongoDB, and Elasticsearch write, is copied into `record` as i
 nesting and value types. The `key=value` pairs of a line, as dockerd, Kubernetes, and Terraform
 write, become an object of strings. A pair counts only at the start of the line or after
 whitespace, so a query string such as `/search?q=1` holds none. `--fields record` writes the record
-alone, and in `csv` the `record` column holds the record's JSON.
+alone, and in `csv` the `record` column holds the record's JSON. `--tz`, `--normalize-dates`, and
+the other date options rewrite the `timestamp` field and `text`, while `record` keeps the line's
+values as written.
+
+Each line is written as soon as it is read, so `tail -f app.log | splash --output jsonl` feeds a
+consumer one complete object per line while the log grows.
 
 ```bash
 splash --mode caddy --path access.log --output jsonl --fields record | jq '.record.request.uri'
@@ -2096,7 +2143,9 @@ client,status,request
 
 ### plain
 
-The parsed line with no styling, for scripting.
+The parsed line with no styling, for scripting. Tabs and runs of spaces are kept as written. Lines
+are written with LF endings whatever the input used: a CRLF ending becomes LF, a carriage return
+inside a line is kept, and a last line without an ending gets one. Blank lines are left out.
 
 ```bash
 cat access.log | splash --mode clf --output plain
@@ -2110,10 +2159,12 @@ Parsed tokens borrow the text of the line they came from, so a line is read once
 on its way to the renderer. Patterns are compiled the first time they are needed and kept for the
 rest of the run, and patterns supplied at run time are cached by `parser::cached_pattern`.
 
-Files are read whole and rendered before `--follow` starts watching for new lines. A file of 64 KiB or
-more is memory mapped rather than read into memory, and its lines are split across worker threads.
-`--jobs N` sets the worker count, which defaults to one per core. Inputs under 512 lines are
-rendered on one thread, where splitting the work costs more than it saves.
+A file of 64 KiB or more is memory mapped rather than read into memory. Its text is rendered and
+written 1 MiB at a time, at line breaks, and each piece's lines are split across worker threads,
+so the memory splash holds stays the same whatever the size of the file. The mapped pages are the
+file's own, which the system drops and reads again as it needs. `--jobs N` sets the worker count,
+which defaults to one per core. Inputs under 512 lines are rendered on one thread, where splitting
+the work costs more than it saves.
 
 ```bash
 splash --mode clf --path /var/log/apache2/access.log --jobs 8
@@ -2122,18 +2173,44 @@ splash --mode clf --path /var/log/apache2/access.log --jobs 8
 ### Benchmarks
 
 `cargo bench` times splash against itself at several settings and, when ccze is installed, against
-ccze over the same log.
+ccze over the same log. It then writes generated Common Log Format files of each size asked for,
+times the splash binary rendering each one, and reads the binary's peak memory from the system.
+`SPLASH_BENCH_SIZES` names the sizes, `small` (under 1 MB), `medium` (1 to 100 MB), `large` (100
+MB to 1 GB), and `huge` (over 1 GB), and defaults to `small,medium`. Last, it times the binary
+starting up and exiting on an empty input.
+
+```bash
+SPLASH_BENCH_SIZES=small,medium,large,huge cargo bench
+```
 
 ```
 Rendering 20000 log lines
-  splash clf ansi                 20000 lines in    33.636 ms        594603 lines/sec    1.00x
-  splash clf ansi -j 18           20000 lines in     5.355 ms       3734740 lines/sec    6.28x
-  splash clf plain                20000 lines in    18.454 ms       1083771 lines/sec    1.82x
-  splash ad-hoc ansi              20000 lines in    36.841 ms        542869 lines/sec    0.91x
+  splash clf ansi                 20000 lines in    34.630 ms        577527 lines/sec    1.00x
+  splash clf ansi -j 18           20000 lines in     6.020 ms       3322489 lines/sec    5.75x
+  splash clf plain                20000 lines in    19.997 ms       1000138 lines/sec    1.73x
+  splash ad-hoc ansi              20000 lines in    47.537 ms        420726 lines/sec    0.73x
+
+Rendering log files with the splash binary (clf, ansi, output discarded)
+  small          10000 lines       0.9 MB in     0.010 s       988443 lines/sec     84.1 MB/sec   24.3 MB peak memory
+  medium        600000 lines      51.5 MB in     0.340 s      1765349 lines/sec    151.7 MB/sec   82.6 MB peak memory
+  large        2500000 lines     214.8 MB in     1.516 s      1649017 lines/sec    141.7 MB/sec  248.1 MB peak memory
+  huge        13000000 lines    1116.9 MB in     7.788 s      1669237 lines/sec    143.4 MB/sec 1150.3 MB peak memory
+
+Starting up and exiting on an empty input: 3.03 ms, 9.6 MB peak memory
 ```
 
-The numbers above are from one machine, on a generated Common Log Format sample. Run the benchmark
-on yours before drawing conclusions from them.
+The numbers above are from one machine with 18 cores, running macOS. The peak memory of a file
+includes the pages of the file mapped while it was read, about 33 MB above the file's size.
+Run the benchmark on yours before drawing conclusions from them.
+
+### Tracking regressions
+
+`tests/memory_tests.rs` counts every allocation the tests make. It checks that rendering a file
+holds the same memory whatever the file's size, and that rendering a line makes no more than a set
+number of allocations: 80 in ANSI and 40 as plain text. These counts do not depend on the speed of
+the machine, so they run with the rest of the tests. CI also runs `cargo bench` with the small,
+medium, and large files on every push and writes its report to the run's summary, so the timings
+of each change can be compared by hand.
 
 ---
 
@@ -2216,7 +2293,8 @@ on yours before drawing conclusions from them.
 - Parsing that borrows the input rather than copying it
 - Patterns compiled on first use and cached
 - Rendering split across worker threads, set with `--jobs`
-- `cargo bench` benchmark suite, comparing to ccze when it is installed
+- `cargo bench` benchmark suite timing files from under 1 MB to over 1 GB and startup, comparing to
+  ccze when it is installed
 
 **Configuration**
 - `~/.splash/config.toml` and `~/.splashrc` config files

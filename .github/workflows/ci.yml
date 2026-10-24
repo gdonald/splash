@@ -97,3 +97,36 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./cobertura.xml
           fail_ci_if_error: false
+
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install LLVM and Clang
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18 all
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run benchmarks
+        shell: bash
+        env:
+          SPLASH_BENCH_SIZES: small,medium,large
+        run: cargo bench --bench render | tee benchmark.txt
+
+      - name: Publish benchmark results
+        shell: bash
+        run: |
+          {
+            echo '### Benchmark'
+            echo '```'
+            cat benchmark.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

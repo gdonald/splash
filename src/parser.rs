@@ -228,29 +228,46 @@ fn whole_word_kind(core: &str) -> Option<TokenKind> {
 /// Parses a Common Log Format line into its named fields.
 pub fn parse_clf_line(line: &str) -> Option<ParsedLine<'_>> {
     let caps = CLF.captures(line)?;
-    let field = |index: usize| caps.get(index).unwrap().as_str();
-
-    let tokens = vec![
-        Token::new(field(1), TokenKind::Client),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(2), TokenKind::UserIdentifier),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(3), TokenKind::UserId),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(4), TokenKind::Timestamp),
-        Token::new(" ", TokenKind::Plain),
-        Token::new("\"", TokenKind::Punctuation),
-        Token::new(field(5), TokenKind::Method),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(6), TokenKind::Request),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(7), TokenKind::Protocol),
-        Token::new("\"", TokenKind::Punctuation),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(8), TokenKind::Status),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(9), TokenKind::Size),
+    let kinds = [
+        TokenKind::Client,
+        TokenKind::UserIdentifier,
+        TokenKind::UserId,
+        TokenKind::Timestamp,
+        TokenKind::Method,
+        TokenKind::Request,
+        TokenKind::Protocol,
+        TokenKind::Status,
+        TokenKind::Size,
     ];
+    let mut tokens = Vec::new();
+    let mut cursor = 0;
+
+    for (index, kind) in kinds.into_iter().enumerate() {
+        let field = caps.get(index + 1).unwrap();
+
+        push_between(&mut tokens, &line[cursor..field.start()]);
+        tokens.push(Token::new(field.as_str(), kind));
+        cursor = field.end();
+    }
+
+    push_between(&mut tokens, &line[cursor..]);
 
     Some(ParsedLine::new(tokens))
+}
+
+/// Pushes the text between fields: each quote as punctuation and the rest
+/// as plain text
+fn push_between<'a>(tokens: &mut Vec<Token<'a>>, text: &'a str) {
+    for piece in text.split_inclusive('"') {
+        match piece.strip_suffix('"') {
+            Some(before) => {
+                if !before.is_empty() {
+                    tokens.push(Token::new(before, TokenKind::Plain));
+                }
+
+                tokens.push(Token::new("\"", TokenKind::Punctuation));
+            }
+            None => tokens.push(Token::new(piece, TokenKind::Plain)),
+        }
+    }
 }

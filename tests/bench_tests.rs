@@ -1,5 +1,7 @@
 use splash::bench::{
-    measure, measure_ccze, measure_command, measure_splash, report, sample_log, which, Measurement,
+    faster, fastest_run, max_rss_bytes, measure, measure_ccze, measure_command, measure_splash,
+    report, run_process, sample_line, sample_log, selected_tiers, tier_report_line,
+    wait_with_peak_memory, which, write_sample_log, Measurement, ProcessRun, SIZE_TIERS,
 };
 use splash::output::OutputMode;
 use splash::parser::parse_clf_line;
@@ -197,4 +199,156 @@ fn ccze_is_measured_when_ccze_is_installed() {
     let measurement = measure_ccze("alpha\nbeta\n", 1);
 
     assert_eq!(measurement.is_some(), which("ccze").is_some());
+}
+
+#[test]
+fn a_sample_log_is_made_of_its_sample_lines() {
+    assert_eq!(sample_log(3), (0..3).map(sample_line).collect::<String>());
+}
+
+#[test]
+fn a_written_sample_log_holds_the_sample_and_reports_its_size() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("sample.log");
+
+    let written = write_sample_log(&path, 500).unwrap();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), sample_log(500));
+    assert_eq!(written, sample_log(500).len() as u64);
+}
+
+#[test]
+fn a_sample_log_cannot_be_written_into_a_missing_directory() {
+    assert!(write_sample_log(std::path::Path::new("missing/sample.log"), 1).is_err());
+}
+
+#[test]
+fn the_size_tiers_cover_small_medium_large_and_huge_files() {
+    let bytes = |lines: usize| {
+        (0..lines)
+            .map(|number| sample_line(number).len())
+            .sum::<usize>()
+    };
+    let sizes: Vec<(&str, usize)> = SIZE_TIERS
+        .iter()
+        .map(|tier| (tier.name, tier.lines))
+        .collect();
+
+    assert_eq!(
+        sizes,
+        [
+            ("small", 10_000),
+            ("medium", 600_000),
+            ("large", 2_500_000),
+            ("huge", 13_000_000)
+        ]
+    );
+    assert!(bytes(10_000) < 1_000_000);
+    assert!((1_000_000..100_000_000).contains(&bytes(600_000)));
+}
+
+#[test]
+fn the_small_and_medium_tiers_are_timed_unless_others_are_asked_for() {
+    assert_eq!(selected_tiers(None), Ok(SIZE_TIERS[..2].to_vec()));
+}
+
+#[test]
+fn tiers_are_chosen_by_name_in_the_order_given() {
+    assert_eq!(
+        selected_tiers(Some("huge, small,")),
+        Ok(vec![SIZE_TIERS[3], SIZE_TIERS[0]])
+    );
+}
+
+#[test]
+fn a_tier_name_that_is_no_tier_is_reported() {
+    assert_eq!(
+        selected_tiers(Some("small,giant")),
+        Err("Unknown size 'giant' (expected small, medium, large, or huge)".to_string())
+    );
+}
+
+fn run(millis: u64, peak_memory: Option<u64>) -> ProcessRun {
+    ProcessRun {
+        elapsed: Duration::from_millis(millis),
+        peak_memory,
+        succeeded: true,
+    }
+}
+
+#[test]
+fn the_faster_run_is_kept_with_the_larger_peak_memory() {
+    assert_eq!(faster(run(20, Some(5)), run(10, Some(3))), run(10, Some(5)));
+    assert_eq!(faster(run(10, Some(3)), run(20, Some(5))), run(10, Some(5)));
+}
+
+#[test]
+fn a_tier_report_line_names_the_size_rates_and_peak_memory() {
+    assert_eq!(
+        tier_report_line(&SIZE_TIERS[0], 2_000_000, &run(2000, Some(24_300_000))),
+        "  small          10000 lines       2.0 MB in     2.000 s         5000 lines/sec      1.0 MB/sec   24.3 MB peak memory"
+    );
+}
+
+#[test]
+fn a_tier_report_line_of_a_run_too_short_to_time_reports_no_rate_or_memory() {
+    assert_eq!(
+        tier_report_line(&SIZE_TIERS[0], 2_000_000, &run(0, None)),
+        "  small          10000 lines       2.0 MB in     0.000 s            0 lines/sec      0.0 MB/sec   unknown peak memory"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn peak_memory_is_reported_in_bytes_as_macos_gives_it() {
+    assert_eq!(max_rss_bytes(4096), 4096);
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn peak_memory_is_reported_in_bytes_from_the_kilobytes_linux_gives() {
+    assert_eq!(max_rss_bytes(4), 4096);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_process_run_reports_its_success_and_peak_memory() {
+    let finished = run_process(&which("true").unwrap(), &[]).unwrap();
+
+    assert!(finished.succeeded);
+    assert!(finished.peak_memory.unwrap() > 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_process_that_fails_is_reported_as_failed() {
+    assert!(
+        !run_process(&which("false").unwrap(), &[])
+            .unwrap()
+            .succeeded
+    );
+}
+
+#[test]
+fn a_program_that_cannot_be_started_is_an_error() {
+    assert!(run_process(std::path::Path::new("missing/program"), &[]).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_fastest_run_of_several_is_kept() {
+    let fastest = fastest_run(&which("true").unwrap(), &[], 3).unwrap();
+
+    assert!(fastest.succeeded);
+}
+
+#[cfg(unix)]
+#[test]
+fn waiting_for_a_process_already_waited_for_is_an_error() {
+    let mut child = std::process::Command::new(which("true").unwrap())
+        .spawn()
+        .unwrap();
+    child.wait().unwrap();
+
+    assert!(wait_with_peak_memory(child).is_err());
 }

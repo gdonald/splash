@@ -77,6 +77,7 @@ fn a_mode_scores_the_lines_it_reads_and_the_fields_it_picks_out() {
         Detection {
             mode: "clf".to_string(),
             matched: 1,
+            timestamps: 1,
             fields: 9,
             confidence: 0.5,
         }
@@ -189,6 +190,7 @@ fn detection_picks_the_format_of_each_single_format_example_log() {
         ("haproxy_http.log", "haproxy"),
         ("httpd_combined.log", "httpd"),
         ("icecast_error.log", "icecast"),
+        ("journalctl_follow.log", "journalctl"),
         ("journalctl_short.log", "journalctl"),
         ("kubernetes_cri.log", "kubernetes"),
         ("mongodb_json.log", "mongodb"),
@@ -208,6 +210,8 @@ fn detection_picks_the_format_of_each_single_format_example_log() {
         ("sudo_syslog.log", "sudo"),
         ("sulog_solaris.log", "sulog"),
         ("super_logfile.log", "super"),
+        ("multi_service_syslog.log", "syslog"),
+        ("real_syslog.log", "syslog"),
         ("syslog_rfc5424.log", "syslog"),
         ("syslog_traditional.log", "syslog"),
         ("terraform_log.log", "terraform"),
@@ -344,8 +348,129 @@ fn detection_prefers_a_program_mode_reading_enough_of_the_sample_over_the_syslog
 }
 
 #[test]
-fn detection_picks_the_syslog_family_when_no_program_mode_reads_enough_of_the_sample() {
+fn detection_picks_the_syslog_mode_for_the_syslog_lines_of_several_programs() {
     let detection = detect::detect(&[POSTFIX, SSHD, SUDO]).unwrap();
 
+    assert_eq!(detection.mode, "syslog");
+}
+
+const CRON_SESSION: &str =
+    "Oct  3 12:17:01 web01 CRON[5101]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)";
+
+#[test]
+fn the_auth_mode_counts_only_lines_of_the_programs_that_write_auth_log() {
+    let detection = detect::score_mode("auth", &[POSTFIX, SSHD, SUDO, CRON_SESSION]);
+
+    assert_eq!(detection.confidence, 0.75);
+}
+
+#[test]
+fn detection_picks_the_auth_mode_for_lines_of_several_authentication_programs() {
+    let detection = detect::detect(&[SSHD, SUDO, CRON_SESSION]).unwrap();
+
     assert_eq!(detection.mode, "auth");
+}
+
+const JOURNAL_LINE: &str = "Oct 03 12:00:01 web01 systemd[1]: Started nginx.service.";
+
+#[test]
+fn the_journalctl_mode_has_no_confidence_without_a_line_only_journalctl_writes() {
+    let detection = detect::score_mode(
+        "journalctl",
+        &[
+            POSTFIX,
+            "Oct 13 12:00:01 web01 systemd[1]: Started nginx.service.",
+        ],
+    );
+
+    assert_eq!(detection.confidence, 0.0);
+}
+
+#[test]
+fn detection_picks_the_journalctl_mode_for_a_day_padded_with_a_zero() {
+    let detection = detect::detect(&[JOURNAL_LINE, JOURNAL_LINE, SSHD]).unwrap();
+
+    assert_eq!(
+        (detection.mode.as_str(), detection.confidence),
+        ("journalctl", 1.0)
+    );
+}
+
+#[test]
+fn lines_only_journalctl_writes_are_recognized() {
+    for line in [
+        "-- Boot 0123456789abcdef0123456789abcdef --",
+        "-- No entries --",
+        "Oct 03 12:00:01 web01 systemd[1]: Started nginx.service.",
+        "Oct 13 12:00:01.123456 web01 systemd[1]: Started nginx.service.",
+        "2023-10-03T12:00:01+0000 web01 systemd[1]: Started nginx.service.",
+        "2023-10-03T12:00:01.123456-0500 web01 systemd[1]: Started nginx.service.",
+        "[ 1234.567890] web01 systemd[1]: Started nginx.service.",
+        "1696334401.123456 web01 systemd[1]: Started nginx.service.",
+    ] {
+        assert!(splash::journalctl::is_journal_form(line), "{}", line);
+    }
+}
+
+#[test]
+fn lines_a_syslog_daemon_writes_are_not_taken_for_journalctl() {
+    for line in [
+        "Oct  3 12:00:01 web01 systemd[1]: Started nginx.service.",
+        "Oct 13 12:00:01 web01 systemd[1]: Started nginx.service.",
+        "2023-10-03T12:00:01.123456+00:00 web01 systemd[1]: Started nginx.service.",
+    ] {
+        assert!(!splash::journalctl::is_journal_form(line), "{}", line);
+    }
+}
+
+#[test]
+fn ranking_puts_a_mode_finding_timestamps_first_among_modes_reading_the_same_lines() {
+    let ranking = detect::rank(&[
+        r#"{"time":"2023-10-03T12:00:01Z","level":"info","user":{"id":7,"tags":["admin","ops"]},"msg":"login"}"#,
+    ]);
+    let position = |mode: &str| ranking.iter().position(|d| d.mode == mode).unwrap();
+
+    assert_eq!(ranking[0].mode, "caddy");
+    assert!(ranking[position("mongodb")].fields > ranking[0].fields);
+    assert_eq!(ranking[position("mongodb")].timestamps, 0);
+}
+
+const DHCLIENT: &str = "Oct  3 12:00:08 web01 dhclient[612]: DHCPACK of 10.0.0.21 from 10.0.0.1";
+
+#[test]
+fn a_programs_mode_is_the_mode_detection_chooses_for_its_line() {
+    assert_eq!(detect::program_mode(SSHD).as_deref(), Some("ssh"));
+}
+
+#[test]
+fn a_program_only_the_syslog_family_reads_has_no_mode_of_its_own() {
+    assert_eq!(detect::program_mode(DHCLIENT), None);
+}
+
+#[test]
+fn a_line_without_a_syslog_header_names_no_program() {
+    assert_eq!(detect::program_mode(FREE_TEXT), None);
+}
+
+#[test]
+fn a_programs_mode_is_chosen_again_after_the_modes_are_forgotten() {
+    detect::program_mode(POSTFIX);
+    detect::forget_program_modes();
+
+    assert_eq!(detect::program_mode(POSTFIX).as_deref(), Some("postfix"));
+}
+
+#[test]
+fn a_detected_syslog_mode_reads_a_line_with_the_mode_of_its_program() {
+    let kinds = auto_kinds(SSHD, "auto:syslog");
+
+    assert_eq!(kinds, kinds_as(SSHD, "ssh"));
+}
+
+#[test]
+fn a_detected_syslog_mode_reads_a_line_of_a_program_without_a_mode_itself() {
+    assert_eq!(
+        auto_kinds(DHCLIENT, "auto:syslog"),
+        kinds_as(DHCLIENT, "syslog")
+    );
 }

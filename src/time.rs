@@ -131,7 +131,8 @@ impl Civil {
 }
 
 /// `2023-10-03T12:00:01.123Z`, with a space or `T`, a fraction after `.` or
-/// `,`, and a zone of `Z`, `UTC`, `GMT`, or an offset, any of them optional.
+/// `,`, and a zone of `Z`, `UTC`, `GMT`, or an offset in hours or hours and
+/// minutes, any of them optional. RFC 3339 allows a lowercase `t` and `z`.
 /// journalctl's `Tue 2023-10-03 12:00:01 UTC` opens with a weekday, and
 /// nginx writes the date as `2023/10/03`.
 static ISO: LazyLock<Regex> = LazyLock::new(|| {
@@ -139,10 +140,18 @@ static ISO: LazyLock<Regex> = LazyLock::new(|| {
         r"(?x)
         ^(?:[A-Z][a-z]{2}\ )?
         (\d{4})[-/](\d{2})[-/](\d{2})
-        [T\ ](\d{2}):(\d{2})(?::(\d{2}))?
+        [Tt\ ](\d{2}):(\d{2})(?::(\d{2}))?
         (?:[.,]\d+)?
-        \ ?(Z|UTC|GMT|[-+]\d{2}:?\d{2})?
+        \ ?(Z|z|UTC|GMT|[-+]\d{2}(?::?\d{2})?)?
         ",
+    )
+    .unwrap()
+});
+
+/// ISO 8601's basic form, `20231003T120001Z`, with no separators
+static ISO_BASIC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(\d{4})(\d{2})(\d{2})[Tt](\d{2})(\d{2})(\d{2})(?:[.,]\d+)?(Z|z|[-+]\d{2}(?:\d{2})?)?$",
     )
     .unwrap()
 });
@@ -172,9 +181,10 @@ static MONTH_DAY: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Seconds since the epoch, with an optional fraction, or milliseconds
+/// Seconds since the epoch, with an optional fraction, or milliseconds,
+/// microseconds, or nanoseconds
 static EPOCH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:(\d{9,10})(?:\.\d+)?|(\d{13}))$").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:(\d{9,10})(?:\.\d+)?|(\d{13})|(\d{16})|(\d{19}))$").unwrap());
 
 /// Reads a log timestamp into seconds since the epoch.
 ///
@@ -184,7 +194,7 @@ pub fn parse_timestamp(text: &str, zone: &Zone, now: i64) -> Option<i64> {
     let (start, end) = timestamp_span(text);
     let text = &text[start..end];
 
-    if let Some(caps) = ISO.captures(text) {
+    if let Some(caps) = ISO.captures(text).or_else(|| ISO_BASIC.captures(text)) {
         let number = |index: usize| {
             caps.get(index)
                 .map_or(Some(0), |found| found.as_str().parse().ok())
@@ -199,7 +209,7 @@ pub fn parse_timestamp(text: &str, zone: &Zone, now: i64) -> Option<i64> {
             number(6)? as u32,
         )?;
 
-        return Some(place(civil, caps.get(7).map(|found| found.as_str()), zone));
+        return place(civil, caps.get(7).map(|found| found.as_str()), zone);
     }
 
     if let Some(caps) = DAY_MONTH_YEAR.captures(text) {
@@ -214,7 +224,7 @@ pub fn parse_timestamp(text: &str, zone: &Zone, now: i64) -> Option<i64> {
             number(6)?,
         )?;
 
-        return Some(place(civil, caps.get(7).map(|found| found.as_str()), zone));
+        return place(civil, caps.get(7).map(|found| found.as_str()), zone);
     }
 
     if let Some(caps) = MONTH_DAY.captures(text) {
@@ -255,11 +265,15 @@ pub fn parse_timestamp(text: &str, zone: &Zone, now: i64) -> Option<i64> {
         return seconds.as_str().parse().ok();
     }
 
-    caps.get(2)?
+    let (digits, per_second) = [(2, 1_000), (3, 1_000_000), (4, 1_000_000_000)]
+        .into_iter()
+        .find_map(|(index, per_second)| Some((caps.get(index)?, per_second)))?;
+
+    digits
         .as_str()
         .parse::<i64>()
         .ok()
-        .map(|milliseconds| milliseconds / 1000)
+        .map(|count| count / per_second)
 }
 
 fn is_wrapping(character: char) -> bool {
@@ -380,23 +394,24 @@ fn month_number(name: &str) -> Option<u32> {
         .map(|index| index as u32 + 1)
 }
 
-/// Places a wall clock time with the zone it was written with, or in `zone`
-fn place(civil: Civil, written_zone: Option<&str>, zone: &Zone) -> i64 {
+/// Places a wall clock time with the zone it was written with, or in `zone`,
+/// or returns `None` for an offset beyond 23 hours and 59 minutes
+fn place(civil: Civil, written_zone: Option<&str>, zone: &Zone) -> Option<i64> {
     match written_zone {
-        Some("Z" | "UTC" | "GMT") => civil.seconds(),
-        Some(offset) => civil.seconds() - offset_seconds(offset),
-        None => zone.to_utc(civil.seconds()),
+        Some("Z" | "z" | "UTC" | "GMT") => Some(civil.seconds()),
+        Some(offset) => Some(civil.seconds() - offset_seconds(offset)?),
+        None => Some(zone.to_utc(civil.seconds())),
     }
 }
 
-/// The seconds east of UTC in an offset such as `-0700` or `+05:30`
-fn offset_seconds(offset: &str) -> i64 {
+/// The seconds east of UTC in an offset such as `-0700`, `+05:30`, or `+05`
+fn offset_seconds(offset: &str) -> Option<i64> {
     let sign = if offset.starts_with('-') { -1 } else { 1 };
     let digits: String = offset.chars().filter(char::is_ascii_digit).collect();
     let hours: i64 = digits[..2].parse().unwrap();
-    let minutes: i64 = digits[2..].parse().unwrap();
+    let minutes: i64 = digits[2..].parse().unwrap_or(0);
 
-    sign * (hours * 3600 + minutes * 60)
+    (hours < 24 && minutes < 60).then_some(sign * (hours * 3600 + minutes * 60))
 }
 
 /// Error returned when a moment given on the command line cannot be read

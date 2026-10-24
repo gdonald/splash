@@ -456,3 +456,53 @@ fn a_follower_reads_a_file_created_after_it_started() {
 
     assert_eq!(pending, b"first\n");
 }
+
+#[test]
+fn line_chunks_end_at_line_breaks_near_the_size_asked_for() {
+    let chunks: Vec<&str> = splash::source::line_chunks("one\ntwo\nthree\nfour\n", 9).collect();
+
+    assert_eq!(chunks, ["one\ntwo\n", "three\n", "four\n"]);
+}
+
+#[test]
+fn a_line_longer_than_the_chunk_size_is_a_chunk_of_its_own() {
+    let chunks: Vec<&str> = splash::source::line_chunks("a\nlonger line\nb\n", 4).collect();
+
+    assert_eq!(chunks, ["a\n", "longer line\n", "b\n"]);
+}
+
+#[test]
+fn the_last_chunk_keeps_a_last_line_without_a_line_break() {
+    let chunks: Vec<&str> = splash::source::line_chunks("one\ntwo\nlast", 5).collect();
+
+    assert_eq!(chunks, ["one\n", "two\n", "last"]);
+}
+
+#[test]
+fn a_long_last_line_without_a_line_break_is_the_last_chunk() {
+    let chunks: Vec<&str> = splash::source::line_chunks("a\nunfinished line", 4).collect();
+
+    assert_eq!(chunks, ["a\n", "unfinished line"]);
+}
+
+#[test]
+fn text_shorter_than_the_chunk_size_is_one_chunk() {
+    let chunks: Vec<&str> = splash::source::line_chunks("one\ntwo\n", 1024).collect();
+
+    assert_eq!(chunks, ["one\ntwo\n"]);
+}
+
+#[test]
+fn empty_text_has_no_chunks() {
+    assert_eq!(splash::source::line_chunks("", 1024).count(), 0);
+}
+
+#[test]
+fn the_chunks_join_back_into_the_text() {
+    let text = splash::bench::sample_log(5_000);
+
+    assert_eq!(
+        splash::source::line_chunks(&text, 4096).collect::<String>(),
+        text
+    );
+}

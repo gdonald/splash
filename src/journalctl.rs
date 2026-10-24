@@ -23,6 +23,25 @@ static BOOT: LazyLock<Regex> =
 /// Any other marker, such as `-- No entries --`
 static MARKER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(-- )(.*)( --)$").unwrap());
 
+/// The start of a line in a form journalctl writes and syslog daemons do
+/// not: a marker, a day of the month padded with a zero, a time with
+/// microseconds after a month name, an ISO 8601 time with an offset written
+/// without a colon, a monotonic time, or a Unix time with microseconds
+static JOURNAL_FORM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)
+        ^(?:
+            --\ .*\ --$
+            | [A-Z][a-z]{2}\ 0\d\ \d\d:\d\d:\d\d[\ .]
+            | [A-Z][a-z]{2}\ [\ \d]\d\ \d\d:\d\d:\d\d\.\d{6}\x20
+            | \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?[+-]\d{4}\x20
+            | \[\ *\d+\.\d+\]\x20
+            | \d{9,}\.\d{6}\x20
+        )",
+    )
+    .unwrap()
+});
+
 /// A unit name, or a `key=value` field such as `code=exited`
 static SPOTS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -86,6 +105,32 @@ impl Plugin for JournalctlPlugin {
             None => ParseResult::NoMatch,
         }
     }
+
+    /// The share of the sample this plugin reads, when a line of the sample
+    /// is in a form only journalctl writes, and otherwise nothing, since a
+    /// syslog file is read the same way
+    fn detect_format(&self, sample_lines: &[&str]) -> f32 {
+        let written_by_journalctl = sample_lines
+            .iter()
+            .any(|line| is_journal_form(line) && self.can_parse(line));
+
+        if !written_by_journalctl {
+            return 0.0;
+        }
+
+        let read = sample_lines
+            .iter()
+            .filter(|line| self.can_parse(line))
+            .count();
+
+        read as f32 / sample_lines.len() as f32
+    }
+}
+
+/// Whether a line starts in a form journalctl writes and syslog daemons do
+/// not
+pub fn is_journal_form(line: &str) -> bool {
+    JOURNAL_FORM.is_match(line)
 }
 
 /// Parses one line of journalctl output, or returns `None` when the line is

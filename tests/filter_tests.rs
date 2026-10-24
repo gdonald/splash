@@ -183,6 +183,7 @@ fn a_field_filter_names_a_token_kind_and_a_value() {
         Ok(Field {
             kinds: vec![TokenKind::Status],
             value: "404".to_string(),
+            negated: false,
         })
     );
 }
@@ -197,7 +198,7 @@ fn an_ip_field_filter_also_matches_an_access_log_client() {
 
 #[test]
 fn a_malformed_field_filter_is_reported() {
-    for text in ["status", "=404", "status=", " =404"] {
+    for text in ["status", "=404", "status=", " =404", "!=404", "status!="] {
         assert_eq!(
             Field::parse(text),
             Err(FilterError::BadField(text.to_string())),
@@ -639,5 +640,120 @@ fn every_level_has_a_name() {
         ]
         .map(|level| level.name()),
         ["trace", "debug", "info", "notice", "warning", "error", "critical"]
+    );
+}
+
+#[test]
+fn an_entry_numbers_the_lines_of_each_chunk_after_those_before_it() {
+    let mut entry = splash::filter::Entry::default();
+
+    assert_eq!(entry.number_lines(3), 1);
+    assert_eq!(entry.number_lines(0), 4);
+    assert_eq!(entry.number_lines(2), 4);
+    assert_eq!(entry.number_lines(1), 6);
+}
+
+#[test]
+fn a_negated_field_filter_names_a_token_kind_and_a_value() {
+    assert_eq!(
+        Field::parse("status!=200"),
+        Ok(Field {
+            kinds: vec![TokenKind::Status],
+            value: "200".to_string(),
+            negated: true,
+        })
+    );
+}
+
+fn status_line(status: &str) -> ParsedLine<'_> {
+    ParsedLine::new(vec![
+        Token::new("GET /", TokenKind::Request),
+        Token::new(" ", TokenKind::Plain),
+        Token::new(status, TokenKind::Status),
+    ])
+}
+
+#[test]
+fn a_negated_field_filter_drops_lines_holding_the_field() {
+    let mut given = options();
+    given.fields = vec!["status!=200".to_string()];
+    let filter = build(given);
+
+    assert!(!filter.judge(&status_line("200")).matches);
+    assert!(filter.judge(&status_line("500")).matches);
+    assert!(filter.judge(&plain_line("no status here")).matches);
+}
+
+#[test]
+fn negated_and_plain_field_filters_combine() {
+    let mut given = options();
+    given.fields = vec!["status!=200".to_string(), "request=GET /".to_string()];
+    let filter = build(given);
+
+    assert!(filter.judge(&status_line("404")).matches);
+    assert!(!filter.judge(&status_line("200")).matches);
+    assert!(!filter.judge(&plain_line("404")).matches);
+}
+
+fn excluding(levels: &str) -> Filter {
+    let mut given = options();
+    given.levels = vec![levels.to_string()];
+    build(given)
+}
+
+#[test]
+fn an_excluded_level_drops_its_entries_and_keeps_the_others() {
+    let filter = excluding("!debug,!trace");
+
+    assert_eq!(
+        filter
+            .judge(&entry_line("2023-10-03T12:00:01Z", "DEBUG", "cache"))
+            .entry,
+        Some(false)
+    );
+    assert_eq!(
+        filter
+            .judge(&entry_line("2023-10-03T12:00:01Z", "WARN", "cache"))
+            .entry,
+        Some(true)
+    );
+}
+
+#[test]
+fn an_excluded_level_keeps_an_entry_with_a_timestamp_and_no_level() {
+    let parsed = ParsedLine::new(vec![
+        Token::new("Oct  3 12:00:01", TokenKind::Timestamp),
+        Token::new(" disk is fine", TokenKind::Message),
+    ]);
+
+    assert_eq!(excluding("!debug").judge(&parsed).entry, Some(true));
+}
+
+#[test]
+fn listed_and_excluded_levels_combine() {
+    let filter = excluding("warn,error,!error");
+
+    assert_eq!(
+        filter
+            .judge(&entry_line("2023-10-03T12:00:01Z", "WARN", "disk"))
+            .entry,
+        Some(true)
+    );
+    assert_eq!(
+        filter
+            .judge(&entry_line("2023-10-03T12:00:01Z", "ERROR", "disk"))
+            .entry,
+        Some(false)
+    );
+}
+
+#[test]
+fn an_unknown_excluded_level_is_reported() {
+    let mut given = options();
+    given.levels = vec!["! loud".to_string()];
+
+    assert_eq!(
+        build_error(given),
+        FilterError::UnknownLevel("loud".to_string())
     );
 }

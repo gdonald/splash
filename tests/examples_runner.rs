@@ -9231,3 +9231,354 @@ fn test_the_viewer_needs_a_log_to_show() {
 
     assert!(!run.finish());
 }
+
+// ==================== HTML Style Sheet and Line Number Tests ====================
+
+fn example_css() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("html")
+        .join("report.css")
+}
+
+#[test]
+fn test_html_output_ends_its_style_element_with_the_style_sheet() {
+    let output = run_splash_file_args(&[
+        "--mode",
+        "httpd",
+        "--output",
+        "html",
+        "--css",
+        example_css().to_str().unwrap(),
+        "--path",
+        example_path("httpd_combined.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(output.contains(&format!(
+        "{}</style>\n",
+        std::fs::read_to_string(example_css()).unwrap()
+    )));
+}
+
+#[test]
+fn test_html_line_numbers_number_every_input_line_including_blank_ones() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "html", "--line-numbers"],
+        "service started\n\nservice stopped\n",
+    )
+    .unwrap();
+
+    assert!(output.contains(
+        "<span class=\"splash-line-number\">1</span><span class=\"splash-plain\">service</span>"
+    ));
+    assert!(output.contains(
+        "<span class=\"splash-line-number\">3</span><span class=\"splash-plain\">service</span>"
+    ));
+    assert!(!output.contains("<span class=\"splash-line-number\">2</span>"));
+}
+
+#[test]
+fn test_line_numbers_without_html_output_fail() {
+    let output = run_splash(&["--line-numbers", "--output", "plain"]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: --line-numbers works only with --output html\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_jsonl_output_writes_complete_lines_before_the_input_ends() {
+    let input = example_contents("syslog_traditional.log");
+    let (mut child, stdin, receiver, shown_before_input_ended) =
+        stream_stdin_example(&["--mode", "syslog", "--output", "jsonl"], &input);
+
+    let shown = String::from_utf8_lossy(&shown_before_input_ended).to_string();
+
+    assert!(!shown.is_empty());
+    assert!(shown.ends_with('\n'), "{:?}", shown);
+
+    drop(stdin);
+    child.wait().unwrap();
+
+    let mut output = shown_before_input_ended;
+    output.extend(receiver.iter().flatten());
+    let output = String::from_utf8_lossy(&output).to_string();
+
+    assert_eq!(output.lines().count(), input.lines().count());
+    assert!(output
+        .lines()
+        .all(|line| line.starts_with("{\"text\":\"") && line.ends_with('}')));
+}
+
+// ==================== Plain Output Whitespace and Line Ending Tests ====================
+
+const MIXED_ENDINGS: &str = "name\tstatus   code\r\nOct  3 12:00:01 web01 cron[5101]: job finished\n\r\nprogress 10%\rprogress 90%\r\nlast line";
+
+const MIXED_ENDINGS_PLAIN: &str = "name\tstatus   code\nOct  3 12:00:01 web01 cron[5101]: job finished\nprogress 10%\rprogress 90%\nlast line\n";
+
+#[test]
+fn test_plain_output_of_a_file_keeps_tabs_and_spaces_and_ends_lines_with_lf() {
+    let directory = log_directory(&[("mixed.log", MIXED_ENDINGS)]);
+
+    let output = run_splash_file_args(&[
+        "--output",
+        "plain",
+        "--path",
+        directory.path().join("mixed.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output, MIXED_ENDINGS_PLAIN);
+}
+
+#[test]
+fn test_plain_output_of_stdin_keeps_tabs_and_spaces_and_ends_lines_with_lf() {
+    let output = run_splash_with_stdin_args(&["--output", "plain"], MIXED_ENDINGS).unwrap();
+
+    assert_eq!(output, MIXED_ENDINGS_PLAIN);
+}
+
+#[test]
+fn test_plain_output_in_auto_mode_handles_line_endings_the_same_way() {
+    let output =
+        run_splash_with_stdin_args(&["--auto", "--output", "plain"], MIXED_ENDINGS).unwrap();
+
+    assert_eq!(output, MIXED_ENDINGS_PLAIN);
+}
+
+// ==================== Mixed Format Stream Tests ====================
+
+const MIXED_STREAM_MODES: [&str; 7] = [
+    "clf",
+    "caddy",
+    "ssh",
+    "nginx-error",
+    "postgresql",
+    "ad-hoc",
+    "kubernetes",
+];
+
+fn kinds_in_mode(line: &str, mode: &str) -> Vec<String> {
+    json_kinds(
+        &run_splash_with_stdin_args(
+            &["--mode", mode, "--output", "json"],
+            &format!("{}\n", line),
+        )
+        .unwrap(),
+    )
+    .remove(0)
+}
+
+#[test]
+fn test_auto_mode_colors_each_line_of_a_mixed_stream_in_its_own_format() {
+    let contents = example_contents("mixed_stream.log");
+    let kinds = sample_kinds("mixed_stream.log", &["--auto"]);
+
+    assert_eq!(kinds.len(), MIXED_STREAM_MODES.len());
+
+    for ((line, mode), line_kinds) in contents.lines().zip(MIXED_STREAM_MODES).zip(&kinds) {
+        assert_eq!(*line_kinds, kinds_in_mode(line, mode), "{}", line);
+    }
+}
+
+#[test]
+fn test_auto_mode_colors_lines_of_other_formats_inside_a_log_one_format_dominates() {
+    let syslog = example_contents("syslog_traditional.log");
+    let mixed = example_contents("mixed_stream.log");
+    let contents = format!("{}{}{}", syslog.repeat(10), mixed, syslog);
+
+    let kinds = json_kinds(
+        &run_splash_with_stdin_args(&["--auto", "--output", "json"], &contents).unwrap(),
+    );
+    let first_mixed = syslog.lines().count() * 10;
+
+    for (index, (line, mode)) in mixed.lines().zip(MIXED_STREAM_MODES).enumerate() {
+        assert_eq!(
+            kinds[first_mixed + index],
+            kinds_in_mode(line, mode),
+            "{}",
+            line
+        );
+    }
+
+    assert_eq!(
+        kinds.len(),
+        contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    );
+}
+
+#[test]
+fn test_auto_mode_keeps_every_line_of_a_mixed_stream() {
+    assert_every_line_kept("mixed_stream.log", &["--auto"]);
+}
+
+#[test]
+fn test_an_excluded_level_drops_its_entries_and_their_stack_traces() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "plain", "--level", "!error"],
+        &example_contents("filter_app.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        example_contents("filter_app.log")
+            .lines()
+            .filter(|line| !line.contains("ERROR")
+                && !line.starts_with("java")
+                && !line.starts_with('\t'))
+            .map(|line| format!("{}\n", line))
+            .collect::<String>()
+    );
+}
+
+#[test]
+fn test_a_negated_field_filter_drops_lines_holding_the_field() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "plain",
+            "--filter",
+            "status!=200",
+        ],
+        &example_contents("httpd_combined.log"),
+    )
+    .unwrap();
+
+    assert!(!output.is_empty());
+    assert!(output.lines().all(|line| !line.contains("\" 200 ")));
+}
+
+#[test]
+fn test_every_kind_of_filter_combines() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--auto",
+            "--output",
+            "plain",
+            "--level",
+            "info,warn,error,!error",
+            "--since",
+            "2023-10-03T12:00:02",
+            "--until",
+            "2023-10-03T12:00:04",
+            "--grep",
+            "node-1",
+            "--exclude",
+            "publish_address",
+            "--filter",
+            "level!=INFO",
+        ],
+        &example_contents("filter_app.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        "[2023-10-03T12:00:03,345][WARN ][o.e.c.r.a.DiskThresholdMonitor] [node-1] high disk watermark [90%] exceeded on [node-1]\n"
+    );
+}
+
+#[test]
+fn test_tz_writes_each_timestamp_with_the_offset_the_zone_has_at_it() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "clf",
+            "--output",
+            "plain",
+            "--tz",
+            "America/New_York",
+        ],
+        concat!(
+            "127.0.0.1 - - [15/Jan/2023:12:00:00 +0000] \"GET / HTTP/1.1\" 200 2\n",
+            "127.0.0.1 - - [15/Jul/2023:12:00:00 +0000] \"GET / HTTP/1.1\" 200 2\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "127.0.0.1 - - [2023-01-15T07:00:00-05:00] \"GET / HTTP/1.1\" 200 2\n",
+            "127.0.0.1 - - [2023-07-15T08:00:00-04:00] \"GET / HTTP/1.1\" 200 2\n",
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_crlf_ending_split_across_two_writes_ends_one_followed_line() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\r\nrequest served\r",
+        Some(&|log: &Path| append_to(log, "\n")),
+    );
+
+    assert_eq!(output, "service started\nrequest served\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_lines_from_several_clients_sending_at_once_are_all_rendered_in_each_clients_order() {
+    let mut listening = Listening::start(&["--mode", "ad-hoc", "--output", "plain"]);
+    let address = listening.address.clone();
+    let clients = 4;
+    let lines_each = 200;
+
+    let senders: Vec<_> = (0..clients)
+        .map(|client| {
+            let address = address.clone();
+
+            thread::spawn(move || {
+                let mut connection = std::net::TcpStream::connect(&address).unwrap();
+
+                for line in 0..lines_each {
+                    connection
+                        .write_all(format!("client {} line {}\n", client, line).as_bytes())
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+
+    for sender in senders {
+        sender.join().unwrap();
+    }
+
+    while String::from_utf8_lossy(&listening.written).lines().count() < clients * lines_each {
+        let before = listening.written.len();
+        listening.collect();
+
+        if listening.written.len() == before {
+            break;
+        }
+    }
+
+    let (success, output) = listening.interrupt();
+
+    assert!(success);
+    assert_eq!(output.lines().count(), clients * lines_each);
+
+    for client in 0..clients {
+        let prefix = format!("client {} ", client);
+        let received: Vec<&str> = output
+            .lines()
+            .filter(|line| line.starts_with(&prefix))
+            .collect();
+        let sent: Vec<String> = (0..lines_each)
+            .map(|line| format!("client {} line {}", client, line))
+            .collect();
+
+        assert_eq!(received, sent);
+    }
+}

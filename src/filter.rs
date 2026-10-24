@@ -191,15 +191,22 @@ impl Pattern {
 pub struct Field {
     pub kinds: Vec<TokenKind>,
     pub value: String,
+    /// Whether the filter keeps the lines not holding the field, as
+    /// `KEY!=VALUE` asks
+    pub negated: bool,
 }
 
 impl Field {
-    /// Reads `KEY=VALUE`, where the key is a token kind name. `ip` also
-    /// matches the client address of an access log.
+    /// Reads `KEY=VALUE`, or `KEY!=VALUE` for lines not holding the field,
+    /// where the key is a token kind name. `ip` also matches the client
+    /// address of an access log.
     pub fn parse(text: &str) -> Result<Field, FilterError> {
         let bad = || FilterError::BadField(text.to_string());
         let (key, value) = text.split_once('=').ok_or_else(bad)?;
-        let key = key.trim();
+        let (key, negated) = match key.strip_suffix('!') {
+            Some(key) => (key.trim(), true),
+            None => (key.trim(), false),
+        };
 
         if key.is_empty() || value.is_empty() {
             return Err(bad());
@@ -214,13 +221,16 @@ impl Field {
         Ok(Field {
             kinds,
             value: value.to_string(),
+            negated,
         })
     }
 
     fn matches(&self, parsed: &ParsedLine) -> bool {
-        parsed.tokens.iter().any(|token| {
+        let holds = parsed.tokens.iter().any(|token| {
             self.kinds.contains(&token.kind) && token.text.trim_matches('"') == self.value
-        })
+        });
+
+        holds != self.negated
     }
 }
 
@@ -269,6 +279,8 @@ pub struct FilterOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
     pub levels: Vec<Level>,
+    /// The levels `--level !LEVEL` drops
+    pub excluded_levels: Vec<Level>,
     pub time: Option<TimeRange>,
     pub grep: Vec<Pattern>,
     pub exclude: Vec<Pattern>,
@@ -300,6 +312,7 @@ impl Filter {
     /// as of `now`
     pub fn build_at(options: &FilterOptions, zone: Zone, now: i64) -> Result<Filter, FilterError> {
         let mut levels = Vec::new();
+        let mut excluded_levels = Vec::new();
 
         for name in options.levels.iter().flat_map(|value| value.split(',')) {
             let name = name.trim();
@@ -308,7 +321,12 @@ impl Filter {
                 continue;
             }
 
-            levels.push(
+            let (list, name) = match name.strip_prefix('!') {
+                Some(excluded) => (&mut excluded_levels, excluded.trim()),
+                None => (&mut levels, name),
+            };
+
+            list.push(
                 Level::from_name(name)
                     .ok_or_else(|| FilterError::UnknownLevel(name.to_string()))?,
             );
@@ -333,6 +351,7 @@ impl Filter {
 
         Ok(Filter {
             levels,
+            excluded_levels,
             time,
             grep: compile_all(&options.grep)?,
             exclude: compile_all(&options.exclude)?,
@@ -372,12 +391,15 @@ impl Filter {
     }
 
     fn entry(&self, parsed: &ParsedLine) -> Option<bool> {
-        let level = if self.levels.is_empty() {
+        let level = if self.levels.is_empty() && self.excluded_levels.is_empty() {
             Some(true)
         } else {
             match Level::of_line(parsed) {
-                Some(level) => Some(self.levels.contains(&level)),
-                None if parsed.tokens.iter().any(is_timestamp) => Some(false),
+                Some(level) => Some(
+                    (self.levels.is_empty() || self.levels.contains(&level))
+                        && !self.excluded_levels.contains(&level),
+                ),
+                None if parsed.tokens.iter().any(is_timestamp) => Some(self.levels.is_empty()),
                 None => None,
             }
         };
@@ -439,14 +461,23 @@ fn compile_all(patterns: &[String]) -> Result<Vec<Pattern>, FilterError> {
         .collect()
 }
 
-/// Which entry the lines being rendered belong to, carried from one chunk of
-/// input to the next
+/// Which entry the lines being rendered belong to, and how many lines came
+/// before them, carried from one chunk of input to the next
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Entry {
     kept: bool,
+    lines_before: usize,
 }
 
 impl Entry {
+    /// The line number of the first of `count` lines read next, counting
+    /// them as read
+    pub fn number_lines(&mut self, count: usize) -> usize {
+        let first = self.lines_before + 1;
+        self.lines_before += count;
+        first
+    }
+
     /// Whether a judged line is kept, given the entries before it. A line
     /// belonging to the entry above the first line is dropped.
     pub fn admit(&mut self, judgement: Judgement) -> bool {
