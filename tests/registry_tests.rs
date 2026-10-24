@@ -207,7 +207,7 @@ fn test_describe_plugins_is_empty_for_a_new_registry() {
 }
 
 #[test]
-fn test_describe_plugins_lists_names_with_versions_in_order() {
+fn test_describe_plugins_lists_names_versions_descriptions_and_authors_in_order() {
     let registry = PluginRegistry::new();
     registry
         .register(Arc::new(MockPlugin::new("syslog", 2, 1, 0)))
@@ -219,8 +219,8 @@ fn test_describe_plugins_lists_names_with_versions_in_order() {
     assert_eq!(
         registry.describe_plugins(),
         Ok(vec![
-            "apache v1.0.3".to_string(),
-            "syslog v2.1.0".to_string()
+            "apache v1.0.3: Mock plugin (Test)".to_string(),
+            "syslog v2.1.0: Mock plugin (Test)".to_string()
         ])
     );
 }
@@ -308,4 +308,42 @@ fn systemd_is_another_name_for_the_journalctl_mode() {
 #[test]
 fn a_mode_that_is_not_an_alias_is_kept() {
     assert_eq!(splash::registry::canonical_mode("docker"), "docker");
+}
+
+#[test]
+fn built_in_mode_names_are_reserved() {
+    for name in ["syslog", "clf", "auto", "ad-hoc", "k8s", "systemd"] {
+        assert!(splash::registry::is_builtin(name), "{}", name);
+    }
+
+    assert!(!splash::registry::is_builtin("orders"));
+}
+
+#[test]
+fn test_a_plugin_without_a_description_or_author_is_described_by_name_and_version() {
+    struct Bare {
+        metadata: PluginMetadata,
+    }
+
+    impl Plugin for Bare {
+        fn metadata(&self) -> &PluginMetadata {
+            &self.metadata
+        }
+
+        fn parse_line<'a>(&self, _line: &'a str) -> ParseResult<'a> {
+            ParseResult::NoMatch
+        }
+    }
+
+    let registry = PluginRegistry::new();
+    registry
+        .register(Arc::new(Bare {
+            metadata: PluginMetadata::new("bare", PluginVersion::new(1, 0, 0), "", ""),
+        }))
+        .unwrap();
+
+    assert_eq!(
+        registry.describe_plugins(),
+        Ok(vec!["bare v1.0.0".to_string()])
+    );
 }

@@ -54,7 +54,7 @@ fn viewer_lines_pair_each_rendering_with_the_log_text() {
     assert_eq!(
         lines,
         vec![
-            Line::new("alpha    beta", "alpha beta"),
+            Line::new("alpha    beta", "alpha    beta"),
             Line::new("gamma", "gamma")
         ]
     );

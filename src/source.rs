@@ -124,24 +124,39 @@ fn without_line_ending(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
 
-/// A file read from where its last read stopped
+/// A file read from where its last read stopped, followed across log
+/// rotation as `tail -F` follows it
 pub struct Follower {
     path: PathBuf,
     position: u64,
+    /// The file the path named when it was last opened, kept open so the
+    /// lines written to it before it was rotated away are still read
+    file: Option<File>,
 }
 
 impl Follower {
     /// A follower whose first read starts `position` bytes into the file
     pub fn new(path: PathBuf, position: u64) -> Follower {
-        Follower { path, position }
+        let file = File::open(&path).ok();
+
+        Follower {
+            path,
+            position,
+            file,
+        }
     }
 
     /// Appends the bytes the file gained since the last read to `pending`.
-    /// A file shorter than the bytes already read from it was truncated or
-    /// replaced, so `pending` is cleared and the file is read from its
-    /// beginning.
+    /// A file shorter than the bytes already read from it was truncated, so
+    /// `pending` is cleared and the file is read from its beginning. When the
+    /// path names another file than the one being read, the log was rotated:
+    /// the rest of the old file is read, an unfinished last line of it is
+    /// ended, and the new file is read from its beginning.
     pub fn read(&mut self, pending: &mut Vec<u8>) -> io::Result<()> {
-        let mut file = File::open(&self.path)?;
+        let mut file = match self.file.take() {
+            Some(file) => file,
+            None => File::open(&self.path)?,
+        };
 
         if file.metadata()?.len() < self.position {
             self.position = 0;
@@ -151,8 +166,39 @@ impl Follower {
         file.seek(SeekFrom::Start(self.position))?;
         self.position += file.read_to_end(pending)? as u64;
 
-        Ok(())
+        match File::open(&self.path) {
+            Ok(current) if !same_file(&current, &file)? => {
+                if pending.last().is_some_and(|byte| *byte != b'\n') {
+                    pending.push(b'\n');
+                }
+
+                self.file = Some(current);
+                self.position = 0;
+                self.read(pending)
+            }
+            _ => {
+                self.file = Some(file);
+                Ok(())
+            }
+        }
     }
+}
+
+/// Whether two open files are the same file on disk
+#[cfg(unix)]
+fn same_file(one: &File, other: &File) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let (one, other) = (one.metadata()?, other.metadata()?);
+
+    Ok(one.dev() == other.dev() && one.ino() == other.ino())
+}
+
+/// Whether two open files are the same file on disk. Without inode numbers
+/// rotation is not detected, and the file first opened keeps being read.
+#[cfg(not(unix))]
+fn same_file(_one: &File, _other: &File) -> io::Result<bool> {
+    Ok(true)
 }
 
 /// Removes the lines ending in a line break from the front of `pending` and

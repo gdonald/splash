@@ -387,3 +387,72 @@ fn a_directory_read_recursively_holds_the_files_of_its_subdirectories() {
 fn a_missing_directory_cannot_be_listed() {
     assert!(source::files_in(Path::new("missing-directory"), false).is_err());
 }
+
+fn append(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+
+    fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
+}
+
+#[test]
+fn a_follower_reads_the_rest_of_a_rotated_file_then_the_new_one() {
+    let directory = TempDir::new().unwrap();
+    let path = write(directory.path(), "app.log", b"alpha\n");
+    let mut follower = Follower::new(path.clone(), 6);
+    let mut pending = Vec::new();
+
+    append(&path, b"beta\n");
+    fs::rename(&path, directory.path().join("app.log.1")).unwrap();
+    write(directory.path(), "app.log", b"gamma\n");
+    follower.read(&mut pending).unwrap();
+
+    assert_eq!(pending, b"beta\ngamma\n");
+}
+
+#[test]
+fn an_unfinished_last_line_of_a_rotated_file_is_ended() {
+    let directory = TempDir::new().unwrap();
+    let path = write(directory.path(), "app.log", b"");
+    let mut follower = Follower::new(path.clone(), 0);
+    let mut pending = Vec::new();
+
+    append(&path, b"beta");
+    fs::rename(&path, directory.path().join("app.log.1")).unwrap();
+    write(directory.path(), "app.log", b"gamma\n");
+    follower.read(&mut pending).unwrap();
+
+    assert_eq!(pending, b"beta\ngamma\n");
+}
+
+#[test]
+fn a_rotated_file_keeps_being_read_until_a_new_one_appears() {
+    let directory = TempDir::new().unwrap();
+    let path = write(directory.path(), "app.log", b"");
+    let rotated = directory.path().join("app.log.1");
+    let mut follower = Follower::new(path.clone(), 0);
+    let mut pending = Vec::new();
+
+    fs::rename(&path, &rotated).unwrap();
+    append(&rotated, b"late line\n");
+    follower.read(&mut pending).unwrap();
+
+    assert_eq!(pending, b"late line\n");
+}
+
+#[test]
+fn a_follower_reads_a_file_created_after_it_started() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("later.log");
+    let mut follower = Follower::new(path.clone(), 0);
+    let mut pending = Vec::new();
+
+    write(directory.path(), "later.log", b"first\n");
+    follower.read(&mut pending).unwrap();
+
+    assert_eq!(pending, b"first\n");
+}

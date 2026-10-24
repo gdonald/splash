@@ -1,0 +1,9 @@
+Oct  3 12:00:01 web01 systemd[1]: Starting nginx.service - A high performance web server...
+Oct  3 12:00:01 web01 systemd[1]: Started nginx.service - A high performance web server.
+Oct  3 12:00:02 web01 sshd[4101]: Accepted publickey for alice from 10.0.0.5 port 52144 ssh2: ED25519 SHA256:Kq3v0x2mVb8Pz
+Oct  3 12:00:03 web01 sshd[4120]: Failed password for invalid user admin from 203.0.113.50 port 40122 ssh2
+Oct  3 12:00:04 web01 CRON[4130]: (root) CMD (/usr/local/bin/backup.sh --nightly)
+Oct  3 12:00:05 web01 postfix/smtp[4140]: 3F2A1C0123: to=<bob@example.com>, relay=mx.example.com[198.51.100.25]:25, delay=1.2, delays=0.1/0/0.5/0.6, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 9B8C7D)
+Oct  3 12:00:06 web01 kernel: [12345.678901] EXT4-fs (sda1): re-mounted. Opts: errors=remount-ro
+Oct  3 12:00:07 web01 sudo[4150]:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx
+Oct  3 12:00:08 web01 dhclient[612]: DHCPACK of 10.0.0.21 from 10.0.0.1

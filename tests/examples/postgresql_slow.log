@@ -1,0 +1,5 @@
+2023-10-03 12:00:01.123 UTC [4101] shop@shop LOG:  duration: 4512.345 ms  statement: SELECT o.id, o.total FROM orders o WHERE o.status = 'pending' ORDER BY o.created_at;
+2023-10-03 12:00:05.456 UTC [4102] reports@shop LOG:  duration: 12003.210 ms  execute <unnamed>: SELECT COUNT(*) FROM order_items WHERE product_id = $1
+2023-10-03 12:00:05.456 UTC [4102] reports@shop DETAIL:  parameters: $1 = '4821'
+2023-10-03 12:00:07.789 UTC [4103] shop@shop ERROR:  canceling statement due to statement timeout
+2023-10-03 12:00:07.789 UTC [4103] shop@shop STATEMENT:  UPDATE inventory SET reserved = reserved + 1 WHERE sku = 'SKU-1042';

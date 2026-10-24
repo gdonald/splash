@@ -102,10 +102,44 @@ fn adhoc_marks_quotes_and_brackets_as_punctuation() {
 }
 
 #[test]
-fn adhoc_collapses_runs_of_whitespace_to_one_space() {
+fn adhoc_keeps_whitespace_as_it_is() {
     let parsed = parse_adhoc_line("  alpha \t beta  ");
 
-    assert_eq!(parsed.text(), "alpha beta");
+    assert_eq!(parsed.text(), "  alpha \t beta  ");
+}
+
+#[test]
+fn adhoc_keeps_the_indentation_of_a_stack_trace() {
+    let parsed = parse_adhoc_line("\tat com.example.Lock.acquire(Lock.java:57)");
+
+    assert_eq!(parsed.tokens[0].text, "\t");
+    assert_eq!(parsed.text(), "\tat com.example.Lock.acquire(Lock.java:57)");
+}
+
+#[test]
+fn adhoc_colors_an_application_loggers_date_and_time_as_one_timestamp() {
+    for (line, timestamp) in [
+        (
+            "2023-10-03 12:00:01,123 ERROR boom",
+            "2023-10-03 12:00:01,123",
+        ),
+        ("at 2023-10-03T12:00:01.5Z ready", "2023-10-03T12:00:01.5Z"),
+        (
+            "2023-10-03 12:00:01+05:30 ready",
+            "2023-10-03 12:00:01+05:30",
+        ),
+    ] {
+        let parsed = parse_adhoc_line(line);
+        let found: Vec<&str> = parsed
+            .tokens
+            .iter()
+            .filter(|token| token.kind == TokenKind::Timestamp)
+            .map(|token| token.text.as_ref())
+            .collect();
+
+        assert_eq!(found, [timestamp], "{}", line);
+        assert_eq!(parsed.text(), line);
+    }
 }
 
 #[test]

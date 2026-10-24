@@ -1,0 +1,9 @@
+# Gunicorn's error log, as gunicorn --error-logfile writes it:
+# [2023-10-03 12:00:01 +0000] [4101] [INFO] Booting worker with pid: 4101
+name = "gunicorn"
+version = "1.0.0"
+description = "Gunicorn error logs"
+author = "splash"
+
+[patterns]
+entry = '^(?P<timestamp>\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+]\d{4}\]) \[(?P<pid>\d+)\] \[(?P<level>[A-Z]+)\] (?P<message>.*)$'

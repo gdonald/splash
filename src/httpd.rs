@@ -64,11 +64,11 @@ fn combined_pattern(vhost: &str) -> String {
             r"(\S+) ",                                         // user identifier
             r"(\S+) ",                                         // userid
             r"(\[[^\]]*\]) ",                                  // timestamp
-            r#""([A-Z]+) (\S+) (\S+)" "#,                      // method, request, protocol
+            r#""(?:([A-Z]+) (\S+) (\S+)|((?:[^"\\]|\\.)*))" "#, // request line, or raw text
             r"(\d{{3}}) ",                                     // status
             r"(\d+|-) ",                                       // size
-            r#""([^"]*)" "#,                                   // referer
-            r#""([^"]*)""#,                                    // user agent
+            r#""((?:[^"\\]|\\.)*)" "#,                         // referer
+            r#""((?:[^"\\]|\\.)*)""#,                          // user agent
             r"(.*)",                                           // extended fields
         ),
         vhost
@@ -130,7 +130,8 @@ pub fn parse_combined_line(line: &str) -> Option<ParsedLine<'_>> {
     };
 
     let offset = usize::from(vhost);
-    let field = |index: usize| caps.get(index + offset).unwrap().as_str();
+    let optional = |index: usize| caps.get(index + offset).map(|found| found.as_str());
+    let field = |index: usize| optional(index).unwrap();
     let mut tokens: Vec<Token> = Vec::new();
 
     if vhost {
@@ -151,27 +152,49 @@ pub fn parse_combined_line(line: &str) -> Option<ParsedLine<'_>> {
         Token::new(field(4), TokenKind::Timestamp),
         Token::new(" ", TokenKind::Plain),
         Token::new("\"", TokenKind::Punctuation),
-        Token::new(field(5), TokenKind::Method),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(6), TokenKind::Request),
-        Token::new(" ", TokenKind::Plain),
-        Token::new(field(7), TokenKind::Protocol),
+    ]);
+
+    match optional(5) {
+        Some(method) => tokens.extend([
+            Token::new(method, TokenKind::Method),
+            Token::new(" ", TokenKind::Plain),
+            Token::new(field(6), TokenKind::Request),
+            Token::new(" ", TokenKind::Plain),
+            Token::new(field(7), TokenKind::Protocol),
+        ]),
+        // A client that sent no request, or bytes that are not one, such as a
+        // TLS handshake to a plain HTTP port
+        None if field(8).is_empty() => {}
+        None => tokens.push(Token::new(field(8), TokenKind::Request)),
+    }
+
+    tokens.extend([
         Token::new("\"", TokenKind::Punctuation),
         Token::new(" ", TokenKind::Plain),
-        Token::new(field(8), TokenKind::Status),
+        Token::new(field(9), TokenKind::Status),
         Token::new(" ", TokenKind::Plain),
-        Token::new(field(9), TokenKind::Size),
+        Token::new(field(10), TokenKind::Size),
         Token::new(" ", TokenKind::Plain),
-        Token::new("\"", TokenKind::Punctuation),
-        Token::new(field(10), TokenKind::Referer),
-        Token::new("\"", TokenKind::Punctuation),
-        Token::new(" ", TokenKind::Plain),
-        Token::new("\"", TokenKind::Punctuation),
-        Token::new(field(11), TokenKind::UserAgent),
         Token::new("\"", TokenKind::Punctuation),
     ]);
 
-    push_extended_fields(&mut tokens, field(12));
+    if !field(11).is_empty() {
+        tokens.push(Token::new(field(11), TokenKind::Referer));
+    }
+
+    tokens.extend([
+        Token::new("\"", TokenKind::Punctuation),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("\"", TokenKind::Punctuation),
+    ]);
+
+    if !field(12).is_empty() {
+        tokens.push(Token::new(field(12), TokenKind::UserAgent));
+    }
+
+    tokens.push(Token::new("\"", TokenKind::Punctuation));
+
+    push_extended_fields(&mut tokens, field(13));
 
     Some(ParsedLine::new(tokens))
 }

@@ -1,0 +1,3 @@
+[2023-10-03 12:00:01,123: INFO/MainProcess] Connected to redis://10.0.0.7:6379/0
+[2023-10-03 12:00:02,456: INFO/ForkPoolWorker-1] Task app.tasks.send_email[8f3c2a1b-0d4e-4f5a-9b6c-7d8e9f0a1b2c] succeeded in 0.42s: None
+[2023-10-03 12:00:03,789: ERROR/ForkPoolWorker-2] Task app.tasks.build_report[1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d] raised unexpected: TimeoutError('report query took too long')

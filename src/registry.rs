@@ -28,7 +28,7 @@ use crate::mysql::MysqlPlugin;
 use crate::nginx_error::NginxErrorPlugin;
 use crate::oops::OopsPlugin;
 use crate::php::PhpPlugin;
-use crate::plugin::{Plugin, PluginVersion};
+use crate::plugin::{Plugin, PluginMetadata, PluginVersion};
 use crate::postfix::PostfixPlugin;
 use crate::postgresql::PostgresqlPlugin;
 use crate::procmail::ProcmailPlugin;
@@ -344,7 +344,7 @@ impl PluginRegistry {
 
         let mut descriptions: Vec<String> = plugins
             .values()
-            .map(|plugin| format!("{} v{}", plugin.name(), plugin.version()))
+            .map(|plugin| describe(plugin.metadata()))
             .collect();
 
         descriptions.sort();
@@ -464,4 +464,37 @@ pub fn canonical_mode(mode: &str) -> &str {
         .iter()
         .find(|(alias, _)| *alias == mode)
         .map_or(mode, |(_, name)| name)
+}
+
+/// The names of the plugins splash is built with
+static BUILTIN_NAMES: LazyLock<Vec<String>> =
+    LazyLock::new(|| PluginRegistry::with_builtins().list_plugins().unwrap());
+
+/// Whether a mode name belongs to splash itself: a built-in plugin, one of
+/// the modes with no plugin, or an alias
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN_NAMES.iter().any(|builtin| builtin == name)
+        || [
+            crate::detect::CLF,
+            crate::detect::AUTO,
+            crate::config::DEFAULT_MODE,
+        ]
+        .contains(&name)
+        || MODE_ALIASES.iter().any(|(alias, _)| *alias == name)
+}
+
+/// A plugin's name and version, then its description and author when it has
+/// them, as `orders v1.2.0: Order service logs (Platform team)`
+fn describe(metadata: &PluginMetadata) -> String {
+    let mut description = format!("{} v{}", metadata.name, metadata.version);
+
+    if !metadata.description.is_empty() {
+        description.push_str(&format!(": {}", metadata.description));
+    }
+
+    if !metadata.author.is_empty() {
+        description.push_str(&format!(" ({})", metadata.author));
+    }
+
+    description
 }

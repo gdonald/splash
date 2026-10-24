@@ -38,6 +38,7 @@ impl From<std::io::Error> for DiscoveryError {
 
 /// Manages plugin discovery from multiple sources
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct PluginDiscovery {
     search_paths: Vec<PathBuf>,
 }
@@ -114,25 +115,19 @@ impl PluginDiscovery {
                 continue;
             }
 
-            // Read directory entries
-            let entries = match fs::read_dir(search_path) {
-                Ok(entries) => entries,
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                    // Skip directories we can't read
-                    continue;
-                }
-                Err(e) => return Err(DiscoveryError::IoError(e)),
+            // A directory splash cannot read is skipped like a missing one
+            let Ok(entries) = fs::read_dir(search_path) else {
+                continue;
             };
 
-            for entry in entries {
-                let entry = entry?;
-                let path = entry.path();
+            let mut found: Vec<PathBuf> = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| self.is_plugin_file(path))
+                .collect();
 
-                // Look for .so (Linux), .dylib (macOS), or .dll (Windows) files
-                if self.is_plugin_file(&path) {
-                    plugin_files.push(path);
-                }
-            }
+            found.sort();
+            plugin_files.extend(found);
         }
 
         Ok(plugin_files)
@@ -146,7 +141,7 @@ impl PluginDiscovery {
 
         if let Some(extension) = path.extension() {
             let ext = extension.to_string_lossy().to_lowercase();
-            matches!(ext.as_str(), "so" | "dylib" | "dll")
+            ext == crate::external::EXTENSION
         } else {
             false
         }
@@ -160,8 +155,7 @@ impl PluginDiscovery {
             if let Some(file_name) = path.file_stem() {
                 let file_name_str = file_name.to_string_lossy();
 
-                // Match plugin name (e.g., "libsyslog" or "syslog" matches "syslog")
-                if file_name_str == name || file_name_str == format!("lib{}", name) {
+                if file_name_str == name {
                     return Ok(Some(path));
                 }
             }

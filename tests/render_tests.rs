@@ -379,7 +379,7 @@ fn the_entry_a_chunk_ends_in_carries_over_to_the_next_chunk() {
 
     assert_eq!(
         render_contents_settings("    at main.rs:42\n", &settings, &mut entry),
-        "at main.rs:42\n"
+        "    at main.rs:42\n"
     );
 }
 

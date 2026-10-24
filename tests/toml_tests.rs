@@ -228,3 +228,36 @@ fn a_toml_error_is_an_error() {
 
     assert!(error.source().is_none());
 }
+
+#[test]
+fn a_literal_string_keeps_its_backslashes() {
+    let entries =
+        splash::toml::parse(r"request = '^(?P<method>\w+) \S+ # not a comment$'").unwrap();
+
+    assert_eq!(
+        entries,
+        [(
+            "request".to_string(),
+            r"^(?P<method>\w+) \S+ # not a comment$".to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_comment_may_follow_a_literal_string() {
+    let entries = splash::toml::parse("pattern = 'a\"b' # it holds a double quote").unwrap();
+
+    assert_eq!(entries, [("pattern".to_string(), "a\"b".to_string())]);
+}
+
+#[test]
+fn an_unterminated_literal_string_is_an_error() {
+    let error = splash::toml::parse("pattern = '^start").unwrap_err();
+
+    assert_eq!(error.to_string(), "line 1: unterminated literal string");
+}
+
+#[test]
+fn a_literal_string_cannot_hold_a_single_quote() {
+    assert!(splash::toml::parse("pattern = 'it's'").is_err());
+}

@@ -1,0 +1,14 @@
+2023-10-03 12:00:01,123 INFO [orders.api] request completed path=/orders status=200 duration_ms=41
+2023-10-03 12:00:02,456 ERROR [orders.worker] unhandled exception processing job 42
+Traceback (most recent call last):
+  File "/srv/orders/worker.py", line 88, in run
+    result = handler(job)
+  File "/srv/orders/handlers.py", line 41, in charge
+    raise PaymentError("card declined")
+orders.errors.PaymentError: card declined
+2023-10-03 12:00:03,789 WARN [orders.api] slow request path=/reports status=200 duration_ms=2310
+2023-10-03 12:00:04,012 ERROR [orders.api] request failed path=/checkout status=500
+java.lang.IllegalStateException: inventory locked
+	at com.example.inventory.Lock.acquire(Lock.java:57)
+	at com.example.orders.Checkout.run(Checkout.java:112)
+2023-10-03 12:00:05,345 INFO [orders.api] request completed path=/health status=200 duration_ms=1

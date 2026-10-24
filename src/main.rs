@@ -9,13 +9,14 @@ use splash::config::{Config, Options, Profiles, Settings};
 use splash::dates::DateOptions;
 use splash::detect;
 use splash::discovery::PluginDiscovery;
+use splash::external::{self, PluginSet, TomlPlugin};
 use splash::filter::{Entry, FilterOptions};
 use splash::forward::{Destination, Forwarder};
 use splash::listen::{self, Received};
 use splash::merge::{self, Log};
 use splash::output::{ParsedLine, Token, TokenKind};
 use splash::rate::RateLimit;
-use splash::registry::PluginRegistry;
+use splash::registry;
 use splash::source::{self, Follower, LogFile};
 use splash::stats::{self, Stats, StatsOptions};
 use splash::syslog;
@@ -30,7 +31,7 @@ use splash::{
 };
 use std::borrow::Cow;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -183,6 +184,18 @@ struct Args {
     #[arg(long)]
     list_plugins: bool,
 
+    /// Also load plugin files from this directory (repeatable)
+    #[arg(long, value_name = "DIR")]
+    plugin_dir: Vec<String>,
+
+    /// Load plugin files again whenever one changes
+    #[arg(long)]
+    reload_plugins: bool,
+
+    /// Report which of a plugin file's patterns read each input line, and exit
+    #[arg(long, value_name = "FILE")]
+    test_regex: Option<String>,
+
     /// Use a specific plugin by name
     #[arg(long)]
     plugin: Option<String>,
@@ -274,6 +287,22 @@ fn main() {
         Err(e) => fail(&e.to_string()),
     };
 
+    if let Some(file) = args.test_regex.as_deref() {
+        std::process::exit(test_regex(file, &args.path));
+    }
+
+    let mut discovery = PluginDiscovery::new();
+
+    for directory in &args.plugin_dir {
+        discovery.add_path(directory);
+    }
+
+    let mut plugins = PluginSet::new();
+
+    for failure in plugins.load(&discovery.discover_plugins().unwrap_or_default()) {
+        eprintln!("{}", failure);
+    }
+
     let profiles = Profiles::default_profiles();
 
     if args.list_themes {
@@ -289,11 +318,7 @@ fn main() {
     if args.list_plugins {
         print!(
             "{}",
-            plugin_summary(
-                &PluginRegistry::with_builtins(),
-                &PluginDiscovery::new(),
-                &config
-            )
+            plugin_summary(registry::builtins(), &discovery, &config)
         );
         return;
     }
@@ -421,6 +446,10 @@ fn main() {
         }
     }
 
+    let _plugin_watcher = args
+        .reload_plugins
+        .then(|| watch_plugins(discovery, plugins));
+
     run(&input, &settings, args.label);
 
     if let Some(forwarder) = FORWARDER.get() {
@@ -526,6 +555,53 @@ struct FileOptions {
 struct Sources {
     files: Vec<PathBuf>,
     directories: Vec<PathBuf>,
+}
+
+/// Reloads plugin files as they change, reporting each reload on stderr,
+/// until the returned watcher is dropped
+fn watch_plugins(discovery: PluginDiscovery, plugins: PluginSet) -> RecommendedWatcher {
+    external::watch(discovery, plugins, |report| eprintln!("{}", report))
+        .unwrap_or_else(|e| fail(&format!("Cannot watch plugin files: {}", e)))
+}
+
+/// Reports which of a plugin file's patterns read each line of stdin or of
+/// the `--path` files, returning the exit status: 1 when a line was not read
+fn test_regex(file: &str, values: &[String]) -> i32 {
+    let plugin = TomlPlugin::load(Path::new(file))
+        .unwrap_or_else(|e| fail(&format!("Cannot load plugin {}: {}", file, e)));
+
+    let mut texts = Vec::new();
+
+    if values.is_empty() || values == [STDIN_PATH] {
+        let mut bytes = Vec::new();
+        let _ = io::stdin().read_to_end(&mut bytes);
+        texts.push((None, String::from_utf8_lossy(&bytes).into_owned()));
+    } else {
+        let sources = expand_paths(values, false).unwrap_or_else(|e| fail(&e.to_string()));
+
+        for path in sources.files {
+            let log = LogFile::open(&path).unwrap_or_else(|e| fail(&e.to_string()));
+            texts.push((Some(path), log.text().to_string()));
+        }
+    }
+
+    let several = texts.len() > 1;
+    let mut status = 0;
+
+    for (path, text) in texts {
+        if let Some(path) = path.filter(|_| several) {
+            println!("==> {} <==", path.display());
+        }
+
+        let report = external::test_patterns(&plugin, &text);
+        print!("{}", report.text);
+
+        if report.unmatched > 0 {
+            status = 1;
+        }
+    }
+
+    status
 }
 
 /// The files and directories the `--path` values name, with their patterns
@@ -644,8 +720,22 @@ fn render_paths(
             .with_compare_contents(true);
         let watching = watcher.insert(RecommendedWatcher::new(tx, config)?);
 
-        for path in &sources.files {
-            watching.watch(path, RecursiveMode::NonRecursive)?;
+        // Watching each file's directory, not the file, sees the new file a
+        // rotation puts in its place, which a watch on the old file misses
+        let mut parents: Vec<&Path> = sources
+            .files
+            .iter()
+            .map(|path| {
+                path.parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+            })
+            .map(|parent| parent.unwrap_or(Path::new(".")))
+            .collect();
+        parents.sort();
+        parents.dedup();
+
+        for parent in parents {
+            watching.watch(parent, RecursiveMode::NonRecursive)?;
         }
 
         let depth = match recursive {

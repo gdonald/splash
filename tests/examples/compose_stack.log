@@ -1,0 +1,7 @@
+db-1     | 2023-10-03 12:00:00.123 UTC [1] LOG:  database system is ready to accept connections
+redis-1  | 1:M 03 Oct 2023 12:00:00.456 * Ready to accept connections tcp
+api-1    | time="2023-10-03T12:00:01Z" level=info msg="listening on :8080"
+web-1    | 172.18.0.1 - - [03/Oct/2023:12:00:02 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0"
+api-1    | time="2023-10-03T12:00:03Z" level=error msg="query failed" error="connection refused"
+web-1    | 172.18.0.1 - - [03/Oct/2023:12:00:03 +0000] "GET /api/orders HTTP/1.1" 502 157 "-" "curl/8.4.0"
+worker-1 | job 42 started

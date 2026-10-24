@@ -1,0 +1,2 @@
+[pid: 4101|app: 0|req: 1/1] 10.0.0.5 () {34 vars in 512 bytes} [Tue Oct  3 12:00:01 2023] GET /index.html => generated 612 bytes in 3 msecs (HTTP/1.1 200) 2 headers in 80 bytes (1 switches on core 0)
+[pid: 4102|app: 0|req: 2/2] 10.0.0.9 () {36 vars in 590 bytes} [Tue Oct  3 12:00:04 2023] POST /login => generated 0 bytes in 41 msecs (HTTP/1.1 302) 3 headers in 120 bytes (1 switches on core 1)

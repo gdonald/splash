@@ -1,0 +1,9 @@
+# uWSGI request logs in the default format:
+# [pid: 4101|app: 0|req: 1/1] 10.0.0.5 () {34 vars in 512 bytes} [Tue Oct  3 12:00:01 2023] GET /index.html => generated 612 bytes in 3 msecs (HTTP/1.1 200) 2 headers in 80 bytes (1 switches on core 0)
+name = "uwsgi"
+version = "1.0.0"
+description = "uWSGI request logs"
+author = "splash"
+
+[patterns]
+request = '^\[pid: (?P<pid>\d+)\|app: \d+\|req: \d+/\d+\] (?P<client>\S+) \(\S*\) \{\d+ vars in \d+ bytes\} \[(?P<timestamp>[^\]]+)\] (?P<method>[A-Z]+) (?P<request>\S+) => generated (?P<size>\d+) bytes in (?P<duration>\d+ msecs) \((?P<protocol>HTTP/[\d.]+) (?P<status>\d{3})\)'

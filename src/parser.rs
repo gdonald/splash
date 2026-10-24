@@ -26,6 +26,16 @@ static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+$").unwrap())
 static DATETIME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d{2}/[[:alpha:]]{3}/\d{4}:\d{2}:\d{2}:\d{2}").unwrap());
 
+/// A date and time as application loggers write them, such as
+/// `2023-10-03 12:00:01,123` or `2023-10-03T12:00:01.123Z`
+static ISO_TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[-+]\d{2}:?\d{2})?")
+        .unwrap()
+});
+
+/// A run of whitespace, or a run of anything else
+static RUNS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+|\S+").unwrap());
+
 static TZ_OFFSET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-]?\d{4}$").unwrap());
 
 /// Patterns compiled at run time, such as ones read from a config file
@@ -126,22 +136,30 @@ pub fn parse_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> {
     }
 }
 
-/// Parses a line with the general purpose pattern matchers.
-///
-/// Runs of whitespace collapse to a single space, matching the ad-hoc output
-/// splash has always produced.
+/// Parses a line with the general purpose pattern matchers, keeping its
+/// whitespace as it is, so the indentation of a stack trace survives.
 pub fn parse_adhoc_line(line: &str) -> ParsedLine<'_> {
     let mut tokens: Vec<Token> = Vec::new();
+    let mut cursor = 0;
 
-    for word in line.split_whitespace() {
-        if !tokens.is_empty() {
-            tokens.push(Token::new(" ", TokenKind::Plain));
-        }
-
-        push_word(&mut tokens, word);
+    for timestamp in ISO_TIMESTAMP.find_iter(line) {
+        push_words(&mut tokens, &line[cursor..timestamp.start()]);
+        tokens.push(Token::new(timestamp.as_str(), TokenKind::Timestamp));
+        cursor = timestamp.end();
     }
 
+    push_words(&mut tokens, &line[cursor..]);
+
     ParsedLine::new(tokens)
+}
+
+fn push_words<'a>(tokens: &mut Vec<Token<'a>>, text: &'a str) {
+    for run in RUNS.find_iter(text) {
+        match run.as_str().starts_with(char::is_whitespace) {
+            true => tokens.push(Token::new(run.as_str(), TokenKind::Plain)),
+            false => push_word(tokens, run.as_str()),
+        }
+    }
 }
 
 fn push_word<'a>(tokens: &mut Vec<Token<'a>>, word: &'a str) {

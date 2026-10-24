@@ -1,8 +1,9 @@
 //! A reader for the subset of TOML splash configuration uses
 //!
 //! Config files are tables of string keys and scalar values, so the reader
-//! handles comments, `[table]` and `[table.sub]` headers, quoted strings, and
-//! bare scalars. Every value is returned as text, paired with its full dotted
+//! handles comments, `[table]` and `[table.sub]` headers, quoted strings,
+//! literal strings in single quotes, which take no escapes and suit regular
+//! expressions, and bare scalars. Every value is returned as text, paired with its full dotted
 //! key path.
 use std::fmt;
 
@@ -101,6 +102,17 @@ fn parse_value(value: &str, number: usize) -> Result<String, TomlError> {
         });
     }
 
+    if let Some(literal) = value.strip_prefix('\'') {
+        return literal
+            .strip_suffix('\'')
+            .filter(|text| !text.contains('\''))
+            .map(str::to_string)
+            .ok_or_else(|| TomlError {
+                line: number,
+                message: "unterminated literal string".to_string(),
+            });
+    }
+
     if !value.starts_with('"') {
         return Ok(value.to_string());
     }
@@ -143,7 +155,7 @@ fn parse_value(value: &str, number: usize) -> Result<String, TomlError> {
 
 /// Removes a trailing comment, leaving `#` inside a quoted string alone
 fn strip_comment(line: &str) -> &str {
-    let mut in_string = false;
+    let mut in_string: Option<char> = None;
     let mut escaped = false;
 
     for (index, character) in line.char_indices() {
@@ -153,9 +165,10 @@ fn strip_comment(line: &str) -> &str {
         }
 
         match character {
-            '\\' if in_string => escaped = true,
-            '"' => in_string = !in_string,
-            '#' if !in_string => return line[..index].trim_end(),
+            '\\' if in_string == Some('"') => escaped = true,
+            '"' | '\'' if in_string.is_none() => in_string = Some(character),
+            '"' | '\'' if in_string == Some(character) => in_string = None,
+            '#' if in_string.is_none() => return line[..index].trim_end(),
             _ => {}
         }
     }

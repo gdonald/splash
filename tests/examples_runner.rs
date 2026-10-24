@@ -425,6 +425,260 @@ fn test_quote_and_bracket_matching() {
 
 // ==================== Integration Tests ====================
 
+/// A real-world sample rendered in `args`, as each line's token kinds
+fn sample_kinds(example: &str, args: &[&str]) -> Vec<Vec<String>> {
+    let mut args = args.to_vec();
+    args.extend(["--output", "json"]);
+
+    json_kinds(&run_splash_with_stdin_args(&args, &example_contents(example)).unwrap())
+}
+
+/// A real-world sample rendered as plain text, which must hold every line as
+/// the log wrote it
+fn assert_every_line_kept(example: &str, args: &[&str]) {
+    let mut args = args.to_vec();
+    args.extend(["--output", "plain"]);
+
+    let output = run_splash_with_stdin_args(&args, &example_contents(example)).unwrap();
+
+    assert_eq!(output, example_contents(example), "{}", example);
+}
+
+#[test]
+fn test_nginx_production_traffic_keeps_every_request() {
+    assert_every_line_kept("nginx_production.log", &["--mode", "httpd"]);
+}
+
+#[test]
+fn test_nginx_production_traffic_reads_ipv6_clients_and_malformed_requests() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "csv",
+            "--fields",
+            "client,request,status",
+        ],
+        &example_contents("nginx_production.log"),
+    )
+    .unwrap();
+    let rows: Vec<&str> = output.lines().collect();
+
+    assert_eq!(rows[2], "2001:db8::1f,/static/app.3f9a2c.js,200");
+    assert_eq!(rows[4], "198.51.100.23,/api/cart,499");
+    assert_eq!(
+        rows[9],
+        r"45.33.32.156,\x16\x03\x01\x02\x00\x01\x00\x01\xFC\x03\x03,400"
+    );
+    assert_eq!(rows[10], "45.33.32.156,-,400");
+}
+
+#[test]
+fn test_nginx_production_traffic_keeps_an_escaped_quote_in_the_user_agent() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "jsonl",
+            "--fields",
+            "user_agent",
+        ],
+        &example_contents("nginx_production.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output.lines().nth(7).unwrap(),
+        r#"{"user_agent":"Mozilla/5.0 \\\"quoted\\\" agent"}"#
+    );
+}
+
+#[test]
+fn test_nginx_production_traffic_statistics_count_every_status() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "httpd", "--stats", "--stats-format", "csv"],
+        &example_contents("nginx_production.log"),
+    )
+    .unwrap();
+
+    for row in [
+        "lines,,10\n",
+        "status,200,4\n",
+        "status,400,2\n",
+        "status,499,1\n",
+        "status,504,1\n",
+    ] {
+        assert!(output.contains(row), "{}", row);
+    }
+}
+
+#[test]
+fn test_a_multi_service_syslog_colors_each_program_by_its_own_mode() {
+    let kinds = sample_kinds("multi_service_syslog.log", &["--auto"]);
+
+    assert_every_line_kept("multi_service_syslog.log", &["--auto"]);
+    assert!(kinds[2].contains(&"success".to_string()));
+    assert!(kinds[3].contains(&"failure".to_string()));
+    assert!(kinds[7].contains(&"userid".to_string()));
+    assert!(kinds[8].contains(&"ip".to_string()));
+}
+
+#[test]
+fn test_docker_compose_stack_logs_color_each_service_in_its_own_format() {
+    let kinds = sample_kinds("compose_stack.log", &["--mode", "docker"]);
+
+    assert_every_line_kept("compose_stack.log", &["--mode", "docker"]);
+    assert_eq!(kinds[0][..3], ["module", "punctuation", "timestamp"]);
+    assert_eq!(kinds[3][..3], ["module", "punctuation", "client"]);
+    assert!(kinds[4].contains(&"failure".to_string()));
+    assert!(kinds[5].contains(&"status".to_string()));
+    assert_eq!(kinds[6], ["module", "punctuation", "message"]);
+}
+
+#[test]
+fn test_kubernetes_cluster_logs_color_pods_components_and_containers() {
+    let kinds = sample_kinds("k8s_cluster.log", &["--mode", "k8s"]);
+
+    assert_every_line_kept("k8s_cluster.log", &["--mode", "k8s"]);
+    assert_eq!(kinds[0][..2], ["module", "client"]);
+    assert_eq!(kinds[2][..2], ["module", "failure"]);
+    assert_eq!(kinds[3][..3], ["timestamp", "host", "tag"]);
+    assert_eq!(kinds[4][..2], ["timestamp", "warning"]);
+    assert!(kinds[5].contains(&"failure".to_string()));
+}
+
+#[test]
+fn test_mysql_slow_query_logs_color_each_entrys_times_and_statement() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "mysql",
+            "--output",
+            "jsonl",
+            "--fields",
+            "duration,request",
+        ],
+        &example_contents("mysql_slow_production.log"),
+    )
+    .unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+
+    assert_every_line_kept("mysql_slow_production.log", &["--mode", "mysql"]);
+    assert_eq!(lines[7], r#"{"duration":["12.003210","0.000201"]}"#);
+    assert!(lines[9].starts_with(r#"{"request":"SELECT COUNT(*) FROM order_items"#));
+}
+
+#[test]
+fn test_postgresql_slow_statement_logs_color_durations_and_failures() {
+    let kinds = sample_kinds("postgresql_slow.log", &["--mode", "postgresql"]);
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "postgresql",
+            "--output",
+            "jsonl",
+            "--fields",
+            "duration",
+        ],
+        &example_contents("postgresql_slow.log"),
+    )
+    .unwrap();
+
+    assert_every_line_kept("postgresql_slow.log", &["--mode", "postgresql"]);
+    assert_eq!(
+        output.lines().nth(1).unwrap(),
+        r#"{"duration":"12003.210 ms"}"#
+    );
+    assert!(kinds[3].contains(&"failure".to_string()));
+    assert!(kinds[4].contains(&"request".to_string()));
+}
+
+#[test]
+fn test_application_error_logs_keep_stack_traces_as_written() {
+    assert_every_line_kept("app_errors.log", &["--auto"]);
+}
+
+#[test]
+fn test_application_error_logs_color_timestamps_and_levels() {
+    let kinds = sample_kinds("app_errors.log", &["--auto"]);
+
+    assert_eq!(kinds[0][..2], ["timestamp", "level"]);
+    assert_eq!(kinds[1][..2], ["timestamp", "failure"]);
+    assert_eq!(kinds[8][..2], ["timestamp", "warning"]);
+}
+
+#[test]
+fn test_application_errors_keep_their_stack_traces_under_a_level_filter() {
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--level", "error", "--output", "plain"],
+        &example_contents("app_errors.log"),
+    )
+    .unwrap();
+    let example = example_contents("app_errors.log");
+    let lines: Vec<&str> = example.lines().collect();
+
+    assert_eq!(
+        output,
+        format!("{}\n{}\n", lines[1..8].join("\n"), lines[9..13].join("\n"))
+    );
+}
+
+#[test]
+fn test_security_audit_logs_mark_failed_and_successful_logins() {
+    let kinds = sample_kinds("auth_security.log", &["--mode", "auth"]);
+    let failures: Vec<usize> = (0..kinds.len())
+        .filter(|index| kinds[*index].contains(&"failure".to_string()))
+        .collect();
+    let successes: Vec<usize> = (0..kinds.len())
+        .filter(|index| kinds[*index].contains(&"success".to_string()))
+        .collect();
+
+    assert_every_line_kept("auth_security.log", &["--mode", "auth"]);
+    assert_eq!(failures, [0, 1, 2, 7, 8]);
+    assert_eq!(successes, [4, 5]);
+}
+
+#[test]
+fn test_security_audit_logs_count_the_attacking_address() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "auth", "--output", "csv", "--fields", "ip"],
+        &example_contents("auth_security.log"),
+    )
+    .unwrap();
+
+    assert_eq!(output.matches("203.0.113.50").count(), 4);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_tail_follow_output_is_shown_as_it_arrives() {
+    assert_eq!(
+        followed_pipe_output("httpd", "nginx_production.log"),
+        example_contents("nginx_production.log")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_followed_log_is_read_across_rotation() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\n",
+        Some(&|log: &Path| {
+            append_to(log, "written before rotation\n");
+            std::fs::rename(log, log.with_extension("log.1")).unwrap();
+            std::fs::write(log, "written after rotation\n").unwrap();
+        }),
+    );
+
+    assert_eq!(
+        output,
+        "service started\nwritten before rotation\nwritten after rotation\n"
+    );
+}
+
 #[test]
 fn test_real_world_apache_log() {
     let example = example_path("real_apache.log");
@@ -6119,7 +6373,7 @@ fn test_grep_highlights_capture_groups() {
 
 #[test]
 fn test_exclude_drops_matching_lines() {
-    let output = filter_example(&["--exclude", "INFO", "--exclude", "^at "]);
+    let output = filter_example(&["--exclude", "INFO", "--exclude", r"^\s+at "]);
 
     assert_eq!(output.lines().count(), 3);
     assert!(!output.contains("starting"));
@@ -7573,6 +7827,357 @@ fn test_a_labeled_file_starts_each_line_with_its_name() {
     .unwrap();
 
     assert_eq!(output, "app.log alpha\napp.log beta\n");
+}
+
+// ==================== Plugin File Tests ====================
+
+fn example_plugins() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("plugins")
+}
+
+fn plugin_output(mode: &str, example: &str) -> String {
+    run_splash_file_args(&[
+        "--plugin-dir",
+        example_plugins().to_str().unwrap(),
+        "--mode",
+        mode,
+        "--output",
+        "jsonl",
+        "--fields",
+        "level,pid,module,request,transaction,success,failure,client,method,status,duration",
+        "--path",
+        example_path(example).to_str().unwrap(),
+    ])
+    .unwrap()
+}
+
+#[test]
+fn test_the_gunicorn_example_plugin_reads_gunicorn_logs() {
+    let output = plugin_output("gunicorn", "gunicorn.log");
+    let lines: Vec<&str> = output.lines().collect();
+
+    assert_eq!(lines.len(), 5);
+    assert_eq!(lines[0], r#"{"level":"INFO","pid":"4100"}"#);
+    assert_eq!(lines[3], r#"{"level":"CRITICAL","pid":"4100"}"#);
+}
+
+#[test]
+fn test_the_celery_example_plugin_reads_celery_logs() {
+    let output = plugin_output("celery", "celery.log");
+
+    assert_eq!(
+        output,
+        concat!(
+            r#"{"level":"INFO","module":"MainProcess"}"#,
+            "\n",
+            r#"{"level":"INFO","module":"ForkPoolWorker-1","request":"app.tasks.send_email","transaction":"8f3c2a1b-0d4e-4f5a-9b6c-7d8e9f0a1b2c","success":"succeeded","duration":"0.42s"}"#,
+            "\n",
+            r#"{"level":"ERROR","module":"ForkPoolWorker-2","request":"app.tasks.build_report","transaction":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","failure":"raised unexpected"}"#,
+            "\n"
+        )
+    );
+}
+
+#[test]
+fn test_the_uwsgi_example_plugin_reads_uwsgi_logs() {
+    let output = plugin_output("uwsgi", "uwsgi.log");
+
+    assert_eq!(
+        output.lines().next().unwrap(),
+        r#"{"pid":"4101","request":"/index.html","client":"10.0.0.5","method":"GET","status":"200","duration":"3 msecs"}"#
+    );
+}
+
+#[test]
+fn test_every_example_plugin_reads_every_line_of_its_example_log() {
+    for name in ["gunicorn", "celery", "uwsgi"] {
+        let output = run_splash(&[
+            "--test-regex",
+            example_plugins()
+                .join(format!("{}.toml", name))
+                .to_str()
+                .unwrap(),
+            "--path",
+            example_path(&format!("{}.log", name)).to_str().unwrap(),
+        ])
+        .unwrap();
+
+        assert!(output.status.success(), "{}", name);
+    }
+}
+
+#[test]
+fn test_auto_mode_detects_a_plugin_files_format() {
+    let output = run_splash_file_args(&[
+        "--plugin-dir",
+        example_plugins().to_str().unwrap(),
+        "--auto",
+        "--output",
+        "jsonl",
+        "--fields",
+        "level",
+        "--path",
+        example_path("gunicorn.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output.lines().next().unwrap(), r#"{"level":"INFO"}"#);
+}
+
+#[test]
+fn test_list_plugins_names_loaded_plugin_files_and_their_directory() {
+    let output = run_splash(&[
+        "--plugin-dir",
+        example_plugins().to_str().unwrap(),
+        "--list-plugins",
+    ])
+    .unwrap();
+    let listed = String::from_utf8_lossy(&output.stdout);
+
+    assert!(listed.contains("celery"));
+    assert!(listed.contains(&format!("  {}\n", example_plugins().display())));
+}
+
+#[test]
+fn test_a_plugin_file_that_cannot_be_loaded_is_reported_and_splash_goes_on() {
+    let directory = log_directory(&[("broken.toml", "name = \"broken\"\n")]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--plugin-dir", directory.path().to_str().unwrap()])
+        .args(["--mode", "ad-hoc", "--output", "plain"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"service started\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "service started\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "Cannot load plugin {}: the plugin has no [patterns]\n",
+            directory.path().join("broken.toml").display()
+        )
+    );
+}
+
+const ORDERS_PLUGIN: &str = "name = \"orders\"\n[patterns]\nplaced = '^(?P<level>[A-Z]+) order (?P<transaction>\\d+) placed$'\n";
+
+#[test]
+fn test_test_regex_reports_each_line_and_succeeds_when_all_are_read() {
+    let directory = log_directory(&[("orders.toml", ORDERS_PLUGIN)]);
+    let plugin = directory.path().join("orders.toml");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--test-regex", plugin.to_str().unwrap()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"INFO order 42 placed\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "1: placed\n   level            INFO\n   transaction      42\n1 of 1 lines matched\n"
+    );
+}
+
+#[test]
+fn test_test_regex_fails_when_a_line_is_not_read() {
+    let directory = log_directory(&[
+        ("orders.toml", ORDERS_PLUGIN),
+        ("a.log", "INFO order 1 placed\n"),
+        ("b.log", "order lost\n"),
+    ]);
+
+    let output = run_splash(&[
+        "--test-regex",
+        directory.path().join("orders.toml").to_str().unwrap(),
+        "--path",
+        directory.path().join("*.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "{}1: placed\n   level            INFO\n   transaction      1\n1 of 1 lines matched\n{}1: no pattern matched\n   order lost\n0 of 1 lines matched\n",
+            header(&directory.path().join("a.log")),
+            header(&directory.path().join("b.log"))
+        )
+    );
+}
+
+#[test]
+fn test_test_regex_reports_a_plugin_file_that_cannot_be_loaded() {
+    let output = run_splash(&["--test-regex", "missing.toml"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("Error: Cannot load plugin missing.toml: missing.toml: "));
+}
+
+#[test]
+fn test_test_regex_reports_a_path_that_cannot_be_read() {
+    let directory = log_directory(&[("orders.toml", ORDERS_PLUGIN)]);
+    let plugin = directory.path().join("orders.toml");
+
+    let missing_pattern = run_splash(&[
+        "--test-regex",
+        plugin.to_str().unwrap(),
+        "--path",
+        directory.path().join("*.log").to_str().unwrap(),
+    ])
+    .unwrap();
+    let missing_file = run_splash(&[
+        "--test-regex",
+        plugin.to_str().unwrap(),
+        "--path",
+        directory.path().join("missing.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(!missing_pattern.status.success());
+    assert!(String::from_utf8_lossy(&missing_pattern.stderr).starts_with("Error: No files match"));
+    assert!(!missing_file.status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_plugin_directory_that_cannot_be_read_does_not_stop_reloading() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = log_directory(&[]);
+    let locked = directory.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = run_splash_with_stdin_args(
+        &[
+            "--plugin-dir",
+            locked.to_str().unwrap(),
+            "--reload-plugins",
+            "--mode",
+            "ad-hoc",
+            "--output",
+            "plain",
+        ],
+        "service started\n",
+    );
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(output.unwrap(), "service started\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_changed_plugin_file_is_used_for_the_lines_that_follow() {
+    use std::io::BufRead;
+
+    let directory = log_directory(&[
+        ("orders.toml", ORDERS_PLUGIN),
+        ("orders.log", "INFO order 1 placed\n"),
+    ]);
+    let plugin = directory.path().join("orders.toml");
+    let log = directory.path().join("orders.log");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--plugin-dir", directory.path().to_str().unwrap()])
+        .args(["--reload-plugins", "--mode", "orders", "--output", "jsonl"])
+        .args([
+            "--fields",
+            "level,message,transaction",
+            "--follow",
+            "--path",
+        ])
+        .arg(&log)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let (report_sender, reports) = mpsc::channel();
+    let stderr = child.stderr.take().unwrap();
+
+    thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            let _ = report_sender.send(line);
+        }
+    });
+
+    let collect = |output: &mut Vec<u8>| {
+        if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            output.extend(chunk);
+
+            while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+                output.extend(chunk);
+            }
+        }
+    };
+
+    let mut output = Vec::new();
+    collect(&mut output);
+
+    let replacement = directory.path().join("orders.toml.new");
+    std::fs::write(
+        &replacement,
+        "name = \"orders\"\nversion = \"2.0.0\"\n[patterns]\nplaced = '^(?P<level>[A-Z]+) (?P<message>.*)$'\n",
+    )
+    .unwrap();
+    std::fs::rename(&replacement, &plugin).unwrap();
+
+    while reports.recv_timeout(FIRST_OUTPUT_DEADLINE).unwrap() != "Reloaded plugins: orders 2.0.0" {
+    }
+
+    append_to(&log, "INFO order 2 placed\n");
+    collect(&mut output);
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    assert!(child.wait().unwrap().success());
+    assert_eq!(
+        String::from_utf8_lossy(&output),
+        "{\"level\":\"INFO\",\"transaction\":\"1\"}\n{\"level\":\"INFO\",\"message\":\"order 2 placed\"}\n"
+    );
 }
 
 // ==================== Rate Limit Tests ====================

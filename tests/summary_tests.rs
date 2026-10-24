@@ -90,7 +90,7 @@ fn an_empty_registry_summary_lists_the_built_in_modes() {
 }
 
 #[test]
-fn a_registered_plugin_appears_with_its_version() {
+fn a_registered_plugin_appears_with_its_version_description_and_author() {
     let registry = PluginRegistry::new();
     registry
         .register(Arc::new(NamedPlugin::new("syslog")))
@@ -98,7 +98,7 @@ fn a_registered_plugin_appears_with_its_version() {
 
     let summary = plugin_summary(&registry, &discovery(), &Config::default());
 
-    assert!(summary.contains("  syslog v1.2.3\n"));
+    assert!(summary.contains("  syslog v1.2.3: Summary plugin (Test)\n"));
     assert!(!summary.contains("No plugins currently registered"));
 }
 

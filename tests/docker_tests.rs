@@ -217,3 +217,60 @@ fn the_plugin_shows_every_line() {
         ParseResult::Parsed(_)
     ));
 }
+
+const COMPOSE: &str = r#"web-1  | 10.0.0.5 - - [03/Oct/2023:12:00:01 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0""#;
+
+const COMPOSE_TIMESTAMPED: &str =
+    "project_db_1  | 2023-10-03T12:00:02.123456789Z ready to accept connections";
+
+#[test]
+fn a_compose_line_colors_the_container_name() {
+    let parsed = docker::parse_compose_line(COMPOSE).unwrap();
+
+    assert_eq!(parsed.text(), COMPOSE);
+    assert_eq!(parsed.tokens[0].text, "web-1");
+    assert_eq!(parsed.tokens[0].kind, TokenKind::Module);
+    assert_eq!(parsed.tokens[1].kind, TokenKind::Punctuation);
+}
+
+#[test]
+fn a_timestamped_compose_line_colors_the_time() {
+    assert_eq!(
+        field(COMPOSE_TIMESTAMPED, TokenKind::Timestamp),
+        "2023-10-03T12:00:02.123456789Z"
+    );
+    assert_eq!(
+        field(COMPOSE_TIMESTAMPED, TokenKind::Module),
+        "project_db_1"
+    );
+}
+
+#[test]
+fn a_name_without_a_replica_number_is_not_a_compose_container() {
+    assert!(docker::parse_compose_line("INFO   | queue drained").is_none());
+}
+
+#[test]
+fn a_compose_line_is_shown_in_the_containers_format() {
+    let kinds = display_kinds(COMPOSE);
+
+    assert_eq!(
+        kinds[..3],
+        [TokenKind::Module, TokenKind::Punctuation, TokenKind::Client]
+    );
+}
+
+#[test]
+fn a_timestamped_compose_line_is_shown_in_the_containers_format_after_the_time() {
+    let line = r#"web-1  | 2023-10-03T12:00:01Z 10.0.0.5 - - [03/Oct/2023:12:00:01 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0""#;
+
+    assert_eq!(
+        display_kinds(line)[..4],
+        [
+            TokenKind::Module,
+            TokenKind::Punctuation,
+            TokenKind::Timestamp,
+            TokenKind::Client
+        ]
+    );
+}

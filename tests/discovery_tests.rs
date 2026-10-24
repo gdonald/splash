@@ -34,21 +34,22 @@ fn test_is_plugin_file() {
     let temp_dir = TempDir::new().unwrap();
     let discovery = PluginDiscovery::new();
 
-    // Create test files
+    let toml_file = temp_dir.path().join("myapp.toml");
+    let upper_file = temp_dir.path().join("other.TOML");
     let so_file = temp_dir.path().join("plugin.so");
-    let dylib_file = temp_dir.path().join("plugin.dylib");
-    let dll_file = temp_dir.path().join("plugin.dll");
     let txt_file = temp_dir.path().join("readme.txt");
+    let bare_file = temp_dir.path().join("README");
 
-    File::create(&so_file).unwrap();
-    File::create(&dylib_file).unwrap();
-    File::create(&dll_file).unwrap();
-    File::create(&txt_file).unwrap();
+    for file in [&toml_file, &upper_file, &so_file, &txt_file, &bare_file] {
+        File::create(file).unwrap();
+    }
 
-    assert!(discovery.is_plugin_file(&so_file));
-    assert!(discovery.is_plugin_file(&dylib_file));
-    assert!(discovery.is_plugin_file(&dll_file));
+    assert!(discovery.is_plugin_file(&toml_file));
+    assert!(discovery.is_plugin_file(&upper_file));
+    assert!(!discovery.is_plugin_file(&so_file));
     assert!(!discovery.is_plugin_file(&txt_file));
+    assert!(!discovery.is_plugin_file(&bare_file));
+    assert!(!discovery.is_plugin_file(temp_dir.path()));
 }
 
 #[test]
@@ -58,8 +59,8 @@ fn test_discover_plugins() {
     create_dir_all(&plugin_dir).unwrap();
 
     // Create some plugin files
-    File::create(plugin_dir.join("plugin1.so")).unwrap();
-    File::create(plugin_dir.join("plugin2.dylib")).unwrap();
+    File::create(plugin_dir.join("plugin2.toml")).unwrap();
+    File::create(plugin_dir.join("plugin1.toml")).unwrap();
     File::create(plugin_dir.join("readme.txt")).unwrap();
 
     let discovery = PluginDiscovery::with_paths(vec![plugin_dir.clone()]);
@@ -74,8 +75,7 @@ fn test_discover_plugins() {
         .map(|n| n.to_string_lossy().to_string())
         .collect();
 
-    assert!(plugin_names.contains(&"plugin1.so".to_string()));
-    assert!(plugin_names.contains(&"plugin2.dylib".to_string()));
+    assert_eq!(plugin_names, ["plugin1.toml", "plugin2.toml"]);
 }
 
 #[test]
@@ -94,26 +94,14 @@ fn test_find_plugin() {
     let plugin_dir = temp_dir.path().join("plugins");
     create_dir_all(&plugin_dir).unwrap();
 
-    // Create plugin files with different naming conventions
-    File::create(plugin_dir.join("syslog.so")).unwrap();
-    File::create(plugin_dir.join("libapache.dylib")).unwrap();
+    File::create(plugin_dir.join("myapp.toml")).unwrap();
 
     let discovery = PluginDiscovery::with_paths(vec![plugin_dir.clone()]);
 
-    // Find by exact name
-    let syslog = discovery.find_plugin("syslog").unwrap();
-    assert!(syslog.is_some());
+    let myapp = discovery.find_plugin("myapp").unwrap();
     assert_eq!(
-        syslog.unwrap().file_name().unwrap().to_str().unwrap(),
-        "syslog.so"
-    );
-
-    // Find by name without lib prefix
-    let apache = discovery.find_plugin("apache").unwrap();
-    assert!(apache.is_some());
-    assert_eq!(
-        apache.unwrap().file_name().unwrap().to_str().unwrap(),
-        "libapache.dylib"
+        myapp.unwrap().file_name().unwrap().to_str().unwrap(),
+        "myapp.toml"
     );
 
     // Non-existent plugin
@@ -130,8 +118,8 @@ fn test_discover_from_multiple_paths() {
     create_dir_all(&dir1).unwrap();
     create_dir_all(&dir2).unwrap();
 
-    File::create(dir1.join("plugin1.so")).unwrap();
-    File::create(dir2.join("plugin2.so")).unwrap();
+    File::create(dir1.join("plugin1.toml")).unwrap();
+    File::create(dir2.join("plugin2.toml")).unwrap();
 
     let discovery = PluginDiscovery::with_paths(vec![dir1, dir2]);
     let plugins = discovery.discover_plugins().unwrap();
@@ -218,4 +206,33 @@ fn test_discovery_skips_a_search_path_that_is_a_file() {
     let discovery = PluginDiscovery::with_paths(vec![path]);
 
     assert_eq!(discovery.discover_plugins().unwrap(), Vec::<PathBuf>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_directory_that_cannot_be_read_is_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let locked = temp_dir.path().join("locked");
+    create_dir_all(&locked).unwrap();
+    File::create(locked.join("myapp.toml")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let plugins = PluginDiscovery::with_paths(vec![locked.clone()]).discover_plugins();
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(plugins.unwrap(), Vec::<PathBuf>::new());
+}
+
+#[test]
+fn test_a_file_given_as_a_search_path_is_skipped() {
+    let temp_dir = TempDir::new().unwrap();
+    let file = temp_dir.path().join("myapp.toml");
+    File::create(&file).unwrap();
+
+    let plugins = PluginDiscovery::with_paths(vec![file]).discover_plugins();
+
+    assert_eq!(plugins.unwrap(), Vec::<PathBuf>::new());
 }

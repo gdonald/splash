@@ -1,0 +1,9 @@
+Oct  3 03:12:01 web01 sshd[5101]: Invalid user oracle from 203.0.113.50 port 40122
+Oct  3 03:12:01 web01 sshd[5101]: Failed password for invalid user oracle from 203.0.113.50 port 40122 ssh2
+Oct  3 03:12:04 web01 sshd[5102]: Failed password for root from 203.0.113.50 port 40130 ssh2
+Oct  3 03:12:09 web01 sshd[5103]: Connection closed by authenticating user root 203.0.113.50 port 40138 [preauth]
+Oct  3 09:00:12 web01 sshd[6101]: Accepted publickey for alice from 10.0.0.5 port 52144 ssh2: ED25519 SHA256:Kq3v0x2mVb8Pz
+Oct  3 09:00:12 web01 sshd[6101]: pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)
+Oct  3 09:05:30 web01 sudo[6150]:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow
+Oct  3 09:06:02 web01 sudo[6160]:      bob : 3 incorrect password attempts ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash
+Oct  3 09:07:44 web01 su[6170]: FAILED SU (to root) bob on pts/1

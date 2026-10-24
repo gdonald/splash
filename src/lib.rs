@@ -19,6 +19,7 @@ pub mod docker;
 pub mod dovecot;
 pub mod elasticsearch;
 pub mod exim;
+pub mod external;
 pub mod fetchmail;
 pub mod filter;
 pub mod forward;

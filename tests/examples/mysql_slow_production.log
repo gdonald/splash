@@ -1,0 +1,10 @@
+# Time: 2023-10-03T12:00:01.123456Z
+# User@Host: shop[shop] @ app01 [10.0.0.11]  Id: 4821
+# Query_time: 4.512345  Lock_time: 0.000123 Rows_sent: 20  Rows_examined: 1834201
+SET timestamp=1696334401;
+SELECT o.id, o.total FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.email LIKE '%@example.com' ORDER BY o.created_at DESC LIMIT 20;
+# Time: 2023-10-03T12:00:09.654321Z
+# User@Host: reports[reports] @ app02 [10.0.0.12]  Id: 4822
+# Query_time: 12.003210  Lock_time: 0.000201 Rows_sent: 1  Rows_examined: 9120443
+SET timestamp=1696334409;
+SELECT COUNT(*) FROM order_items WHERE product_id IN (SELECT id FROM products WHERE discontinued = 1);

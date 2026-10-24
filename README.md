@@ -156,6 +156,10 @@ Options:
       --list-profiles                    List saved color profiles
       --list-themes                      List available color themes
       --list-plugins                     List all available plugins
+      --plugin-dir <DIR>                 Also load plugin files from this directory (repeatable)
+      --reload-plugins                   Load plugin files again whenever one changes
+      --test-regex <FILE>                Report which of a plugin file's patterns read each input
+                                         line, and exit
       --plugin <PLUGIN>                  Use a specific plugin by name
       --disable-plugin <DISABLE_PLUGIN>  Disable a specific plugin by name
       --level <LEVELS>                   Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
@@ -226,7 +230,11 @@ splash --mode httpd --path /var/log/nginx/access.log --follow
 A line is rendered once its line break arrives, so a line the program writing the log has only
 partly written is not split in two. When splash is stopped, an unfinished last line is rendered
 and then what splash writes at the end of its input. A file that shrinks was truncated, and is read
-again from its beginning. `--follow` needs `--path`, since splash already renders stdin as it
+again from its beginning. When logrotate or a server renames the log and starts a new file at the
+same path, splash reads the lines written to the old file before the rename, ends its unfinished
+last line, and then reads the new file from its beginning, as `tail -F` does. Rotation is noticed
+by inode number, which Windows does not give, so on Windows splash keeps reading the file it
+opened. `--follow` needs `--path`, since splash already renders stdin as it
 arrives.
 
 The curses viewer follows its input whether or not `--follow` is given.
@@ -463,6 +471,34 @@ Dropped 1840 lines over the limit of 200 per second
 The limit counts input lines before filters, `--stats`, and `--summary` see them, so dropped lines
 are not counted in the statistics. A `--path` file without `--follow` arrives all at once, so only
 its first N lines are kept. The curses viewer cannot be combined with `--rate-limit`.
+
+---
+
+## Plugins
+
+A plugin file adds a log format without rebuilding splash: a TOML file naming the format and the
+regular expressions that read its lines, whose named groups name the color keys their text is
+styled with. splash loads the files in `~/.splash/plugins`, `/usr/local/lib/splash/plugins`,
+`/usr/lib/splash/plugins`, and any `--plugin-dir`:
+
+```toml
+# ~/.splash/plugins/orders.toml
+name = "orders"
+
+[patterns]
+placed = '^(?P<timestamp>\S+ \S+) (?P<level>[A-Z]+) order (?P<transaction>\d+) placed in (?P<duration>\d+ms)$'
+```
+
+```bash
+splash --mode orders --path /var/log/orders.log
+splash --test-regex ~/.splash/plugins/orders.toml --path /var/log/orders.log
+splash --mode orders --path /var/log/orders.log --follow --reload-plugins
+```
+
+`--test-regex` reports which pattern read each line, `--reload-plugins` loads plugin files again
+as they change, and [`examples/plugins/`](examples/plugins/) holds plugins for Gunicorn, Celery,
+and uWSGI. [PLUGINS.md](PLUGINS.md) describes the plugin file format, a guide to writing one, and
+the Rust API of the built-in plugins.
 
 ---
 
@@ -1725,6 +1761,10 @@ logfmt lines dockerd and containerd write, from a file or from syslog and the jo
 task id as `transaction`, and `module=` as `module`. Reads `docker logs --timestamps` output,
 coloring the time and any address in the line.
 
+`docker compose logs` starts each line with the container's name and a bar, as
+`web-1  | listening on :8080`. The name, which ends in the replica number Compose gives it, is
+colored as `module`, and the line after the bar is read as a container's line.
+
 `docker logs` prints the lines the program in the container wrote, in whatever format that program
 uses. In docker mode, a line in none of Docker's formats is such a line, and it is colored with the
 mode that reads it on its own, as an nginx access line is colored in httpd mode, or kept as text
@@ -1897,8 +1937,11 @@ Automatically detects and highlights patterns in unstructured logs:
 - **IP addresses** (IPv4)
 - **HTTP verbs** (GET, POST, PUT, DELETE, etc.)
 - **Numbers**
-- **Timestamps**
+- **Timestamps**, including the date and time application loggers write, such as
+  `2023-10-03 12:00:01,123` and `2023-10-03T12:00:01.123Z`
 - **Special characters** (quotes, brackets)
+
+Whitespace is kept as the line has it, so the indentation of a stack trace survives.
 
 **Example:**
 ```bash
@@ -1911,7 +1954,7 @@ splash --mode ad-hoc --path /var/log/syslog
 
 ## Output Formats
 
-Every parsing mode can be written out in five formats, selected with `--output`.
+Every parsing mode can be written out in seven formats, selected with `--output`.
 
 ### ansi
 
@@ -2157,6 +2200,7 @@ on yours before drawing conclusions from them.
 **Configuration**
 - `~/.splash/config.toml` and `~/.splashrc` config files
 - Per-plugin settings
+- Plugin files that add log formats, with `--test-regex` and `--reload-plugins` for writing them
 - Color themes: dark, light, solarized, dracula
 - Per-field color overrides from the command line
 - Saved color profiles

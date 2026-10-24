@@ -68,25 +68,41 @@ where
 {
     draw(out, viewer)?;
 
-    loop {
-        let changed = match next_event()? {
-            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => match key_for(key) {
-                Some(key) if viewer.handle(key) == Outcome::Quit => return Ok(()),
-                Some(_) => true,
-                None => false,
-            },
-            Some(Event::Resize(_, rows)) => {
-                viewer.set_height(rows.saturating_sub(1) as usize);
-                true
-            }
-            Some(_) => false,
-            None => take_new_lines(viewer, refresh()?),
-        };
-
+    while let Some(changed) = next_frame(viewer, next_event, refresh)? {
         if changed {
             draw(out, viewer)?;
         }
     }
+
+    Ok(())
+}
+
+/// Handles the next event, returning whether the frame changed, or `None`
+/// when the viewer quits
+fn next_frame<F, R>(
+    viewer: &mut Viewer,
+    next_event: &mut F,
+    refresh: &mut R,
+) -> io::Result<Option<bool>>
+where
+    F: FnMut() -> io::Result<Option<Event>>,
+    R: FnMut() -> io::Result<Vec<Line>>,
+{
+    let changed = match next_event()? {
+        Some(Event::Key(key)) if key.kind == KeyEventKind::Press => match key_for(key) {
+            Some(key) if viewer.handle(key) == Outcome::Quit => return Ok(None),
+            Some(_) => true,
+            None => false,
+        },
+        Some(Event::Resize(_, rows)) => {
+            viewer.set_height(rows.saturating_sub(1) as usize);
+            true
+        }
+        Some(_) => false,
+        None => take_new_lines(viewer, refresh()?),
+    };
+
+    Ok(Some(changed))
 }
 
 /// Adds the lines the log gained, reporting whether there were any
