@@ -29,26 +29,11 @@ fn run_splash(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
 }
 
 /// Helper function to run splash with file input
-/// Note: Uses timeout because file mode runs in watch loop
 fn run_splash_with_file(mode: &str, filepath: &str) -> Result<String, std::io::Error> {
-    // Spawn the command
-    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
-        .arg("--mode")
-        .arg(mode)
-        .arg("--path")
-        .arg(filepath)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
+    let output = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--mode", mode, "--path", filepath])
+        .output()?;
 
-    // Give it time to process and output (watch loop prints immediately then waits)
-    thread::sleep(Duration::from_millis(500));
-
-    // Kill the process (it runs in infinite watch loop)
-    let _ = child.kill();
-
-    // Get the output
-    let output = child.wait_with_output()?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -79,41 +64,13 @@ fn example_contents(filename: &str) -> String {
 }
 
 /// Helper function to run splash against a file with extra arguments
-/// Note: Uses a short wait because file mode runs in a watch loop
 fn run_splash_file_args(args: &[&str]) -> Result<String, std::io::Error> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+    let output = Command::new(env!("CARGO_BIN_EXE_splash"))
         .args(args)
-        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .spawn()?;
+        .output()?;
 
-    let mut stdout = child.stdout.take().unwrap();
-    let (sender, receiver) = mpsc::channel();
-
-    thread::spawn(move || {
-        let mut buffer = [0u8; 8192];
-
-        while let Ok(count) = stdout.read(&mut buffer) {
-            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut output = Vec::new();
-
-    if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
-        output.extend(chunk);
-
-        while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
-            output.extend(chunk);
-        }
-    }
-
-    let _ = child.kill();
-    let _ = child.wait();
-
-    Ok(String::from_utf8_lossy(&output).to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Helper function to run splash against a file, collecting output in a file
@@ -125,10 +82,7 @@ fn run_splash_file_to_file(args: &[&str], output_path: &Path) -> Result<String, 
         .stderr(std::process::Stdio::null())
         .spawn()?;
 
-    thread::sleep(Duration::from_millis(500));
-
-    let _ = child.kill();
-    let _ = child.wait();
+    child.wait()?;
 
     std::fs::read_to_string(output_path)
 }
@@ -6332,21 +6286,60 @@ fn stats_example(args: &[&str]) -> String {
     run_splash_with_stdin_args(&args, &example_contents("stats_access.log")).unwrap()
 }
 
+#[cfg(unix)]
+fn append_to(log: &Path, text: &str) {
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(log)
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+}
+
 /// Follows a copy of the example access log, appends `appended` to it once
 /// the first output has arrived, and stops splash with SIGINT once the
 /// output for the appended lines has arrived, returning everything written
 #[cfg(unix)]
 fn follow_stats_example(args: &[&str], appended: &str) -> String {
+    let mut args = args.to_vec();
+    args.extend(["--mode", "httpd", "--tz", "UTC"]);
+
+    let append = |log: &Path| append_to(log, appended);
+
+    follow_file(
+        &args,
+        example_contents("stats_access.log").as_bytes(),
+        (!appended.is_empty()).then_some(&append as &dyn Fn(&Path)),
+    )
+}
+
+/// Follows a file holding `initial`, makes `change` to it once the first
+/// output has arrived, and stops splash with SIGINT once the output for the
+/// change has arrived, returning everything written
+#[cfg(unix)]
+fn follow_file(args: &[&str], initial: &[u8], change: Option<&dyn Fn(&Path)>) -> String {
+    follow_file_with_errors(args, initial, change).0
+}
+
+/// Follows a file as `follow_file` does, returning what splash wrote to
+/// stdout and to stderr
+#[cfg(unix)]
+fn follow_file_with_errors(
+    args: &[&str],
+    initial: &[u8],
+    change: Option<&dyn Fn(&Path)>,
+) -> (String, String) {
     let directory = tempfile::TempDir::new().unwrap();
-    let log = directory.path().join("access.log");
-    std::fs::write(&log, example_contents("stats_access.log")).unwrap();
+    let log = directory.path().join("followed.log");
+    let errors = directory.path().join("errors.txt");
+    std::fs::write(&log, initial).unwrap();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
         .args(args)
-        .args(["--mode", "httpd", "--tz", "UTC", "--path"])
+        .args(["--follow", "--path"])
         .arg(&log)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&errors).unwrap())
         .spawn()
         .unwrap();
 
@@ -6376,13 +6369,8 @@ fn follow_stats_example(args: &[&str], appended: &str) -> String {
     let mut output = Vec::new();
     collect(&mut output);
 
-    if !appended.is_empty() {
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&log)
-            .unwrap()
-            .write_all(appended.as_bytes())
-            .unwrap();
+    if let Some(change) = change {
+        change(&log);
         collect(&mut output);
     }
 
@@ -6396,7 +6384,10 @@ fn follow_stats_example(args: &[&str], appended: &str) -> String {
         output.extend(chunk);
     }
 
-    String::from_utf8_lossy(&output).to_string()
+    (
+        String::from_utf8_lossy(&output).to_string(),
+        std::fs::read_to_string(&errors).unwrap(),
+    )
 }
 
 #[test]
@@ -6495,6 +6486,663 @@ fn test_html_output_is_closed_when_following_a_file_is_interrupted() {
     let output = follow_stats_example(&["--output", "html"], "");
 
     assert!(output.ends_with("</html>\n"));
+}
+
+// ==================== Follow Mode Tests ====================
+
+#[test]
+fn test_a_file_is_rendered_once_without_follow() {
+    let output = run_splash(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--path",
+        example_path("adhoc_ips.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        example_contents("adhoc_ips.log")
+    );
+}
+
+#[test]
+fn test_follow_needs_a_path() {
+    let output = run_splash(&["--follow"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--path <PATH>"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_followed_file_writes_the_lines_it_gains() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\n",
+        Some(&|log: &Path| append_to(log, "request served\n")),
+    );
+
+    assert_eq!(output, "service started\nrequest served\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_followed_line_is_written_once_it_is_complete() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\nrequest",
+        Some(&|log: &Path| append_to(log, " served\n")),
+    );
+
+    assert_eq!(output, "service started\nrequest served\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_an_unfinished_followed_line_is_written_when_splash_is_interrupted() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\nrequest",
+        None,
+    );
+
+    assert_eq!(output, "service started\nrequest\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_truncated_followed_file_is_read_again_from_its_beginning() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\nrequest served\n",
+        Some(&|log: &Path| std::fs::write(log, "restarted\n").unwrap()),
+    );
+
+    assert_eq!(output, "service started\nrequest served\nrestarted\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_invalid_bytes_a_followed_file_gains_are_replaced() {
+    let output = follow_file(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        b"service started\n",
+        Some(&|log: &Path| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(log)
+                .unwrap()
+                .write_all(b"request \xff served\n")
+                .unwrap()
+        }),
+    );
+
+    assert_eq!(output, "service started\nrequest \u{fffd} served\n");
+}
+
+// ==================== Network Listening Tests ====================
+
+/// Splash listening on a port the system chose
+#[cfg(unix)]
+struct Listening {
+    child: std::process::Child,
+    address: String,
+    output: mpsc::Receiver<Vec<u8>>,
+    written: Vec<u8>,
+}
+
+#[cfg(unix)]
+impl Listening {
+    fn start(args: &[&str]) -> Listening {
+        use std::io::BufRead;
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+            .args(args)
+            .args(["--listen", "127.0.0.1:0"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut announcement = String::new();
+        std::io::BufReader::new(child.stderr.take().unwrap())
+            .read_line(&mut announcement)
+            .unwrap();
+
+        let address = announcement
+            .trim_end()
+            .strip_prefix("Listening on ")
+            .unwrap()
+            .to_string();
+
+        let mut stdout = child.stdout.take().unwrap();
+        let (sender, output) = mpsc::channel();
+
+        thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+
+            while let Ok(count) = stdout.read(&mut buffer) {
+                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Listening {
+            child,
+            address,
+            output,
+            written: Vec::new(),
+        }
+    }
+
+    /// Waits for the output that what was just sent produces
+    fn collect(&mut self) {
+        if let Ok(chunk) = self.output.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            self.written.extend(chunk);
+
+            while let Ok(chunk) = self.output.recv_timeout(OUTPUT_QUIET_PERIOD) {
+                self.written.extend(chunk);
+            }
+        }
+    }
+
+    fn send_raw(&mut self, text: &str) {
+        let mut connection = std::net::TcpStream::connect(&self.address).unwrap();
+        connection.write_all(text.as_bytes()).unwrap();
+        drop(connection);
+        self.collect();
+    }
+
+    /// Posts `body` and returns the response
+    fn post(&mut self, body: &str) -> String {
+        let mut connection = std::net::TcpStream::connect(&self.address).unwrap();
+        write!(
+            connection,
+            "POST /logs HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\n\r\n{}",
+            self.address,
+            body.len(),
+            body
+        )
+        .unwrap();
+
+        let mut response = String::new();
+        connection.read_to_string(&mut response).unwrap();
+        self.collect();
+
+        response
+    }
+
+    /// Stops splash with SIGINT, returning whether it succeeded and
+    /// everything it wrote
+    fn interrupt(mut self) -> (bool, String) {
+        unsafe {
+            libc::kill(self.child.id() as libc::pid_t, libc::SIGINT);
+        }
+
+        let success = self.child.wait().unwrap().success();
+
+        while let Ok(chunk) = self.output.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            self.written.extend(chunk);
+        }
+
+        (success, String::from_utf8_lossy(&self.written).to_string())
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_lines_sent_over_tcp_and_http_are_rendered() {
+    let mut listening = Listening::start(&["--mode", "ad-hoc", "--output", "plain"]);
+
+    listening.send_raw("service started\r\nworker ready\n");
+    let response = listening.post("request served\n");
+    let (success, output) = listening.interrupt();
+
+    assert!(response.starts_with("HTTP/1.1 204 No Content\r\n"));
+    assert!(success);
+    assert_eq!(output, "service started\nworker ready\nrequest served\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_summary_is_written_when_listening_is_interrupted() {
+    let mut listening = Listening::start(&[
+        "--mode",
+        "httpd",
+        "--tz",
+        "UTC",
+        "--output",
+        "plain",
+        "--summary",
+    ]);
+
+    listening.send_raw(&example_contents("stats_access.log"));
+    let (success, output) = listening.interrupt();
+
+    assert!(success);
+    assert!(output.contains("/api/queue/91"));
+    assert!(output.ends_with("To:          2023-10-03T14:10:01Z\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_auto_mode_detects_the_format_of_lines_received() {
+    let mut listening = Listening::start(&["--auto", "--output", "json"]);
+
+    listening.send_raw(&example_contents("stats_access.log"));
+    let (_, output) = listening.interrupt();
+
+    assert!(output.contains(r#"{"kind":"userid","text":"alice"}"#));
+}
+
+#[test]
+fn test_an_address_that_cannot_be_bound_is_reported() {
+    let output = run_splash(&["--listen", "not an address"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("Error: Cannot listen on not an address: "));
+}
+
+#[test]
+fn test_listen_cannot_be_combined_with_a_path() {
+    let output = run_splash(&["--listen", ":0", "--path", "access.log"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+}
+
+// ==================== WebSocket Output Tests ====================
+
+/// Reads one short text message from a WebSocket connection
+fn read_websocket_message(connection: &mut std::net::TcpStream) -> String {
+    let mut header = [0u8; 2];
+    connection.read_exact(&mut header).unwrap();
+    assert_eq!(header[0], 0x81);
+
+    let mut payload = vec![0u8; (header[1] & 0x7f) as usize];
+    connection.read_exact(&mut payload).unwrap();
+
+    String::from_utf8(payload).unwrap()
+}
+
+#[test]
+fn test_output_is_sent_to_websocket_clients() {
+    use std::io::BufRead;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--mode", "ad-hoc", "--output", "plain"])
+        .args(["--websocket", "127.0.0.1:0"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut announcement = String::new();
+    std::io::BufReader::new(child.stderr.take().unwrap())
+        .read_line(&mut announcement)
+        .unwrap();
+    let address = announcement
+        .trim_end()
+        .strip_prefix("Sending WebSocket output on ")
+        .unwrap()
+        .to_string();
+
+    let mut browser = std::net::TcpStream::connect(address).unwrap();
+    browser
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+        .unwrap();
+
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        browser.read_exact(&mut byte).unwrap();
+        response.push(byte[0]);
+    }
+
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(b"service started\nrequest served\n")
+        .unwrap();
+    let messages = [
+        read_websocket_message(&mut browser),
+        read_websocket_message(&mut browser),
+    ];
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
+    assert_eq!(messages, ["service started", "request served"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "service started\nrequest served\n"
+    );
+}
+
+#[test]
+fn test_websocket_output_cannot_be_combined_with_the_curses_viewer() {
+    let output = run_splash(&["--websocket", ":0", "--output", "curses"]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: --websocket sends the output splash writes, and the curses viewer writes none\n"
+    );
+}
+
+#[test]
+fn test_a_websocket_address_that_cannot_be_bound_is_reported() {
+    let output = run_splash(&["--websocket", "not an address"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("Error: Cannot listen on not an address: "));
+}
+
+// ==================== Rate Limit Tests ====================
+
+#[test]
+fn test_lines_over_the_rate_limit_are_dropped_and_counted_on_stderr() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let log = directory.path().join("burst.log");
+    std::fs::write(&log, "one\ntwo\nthree\nfour\nfive\n").unwrap();
+
+    let output = run_splash(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--rate-limit",
+        "2",
+        "--path",
+        log.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "one\ntwo\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Dropped 3 lines over the limit of 2 per second\n"
+    );
+}
+
+#[test]
+fn test_stdin_under_the_rate_limit_is_rendered_whole() {
+    let input = example_contents("stats_access.log");
+
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "plain",
+            "--rate-limit",
+            "1000",
+        ],
+        &input,
+    )
+    .unwrap();
+
+    assert_eq!(output, input);
+}
+
+#[test]
+fn test_auto_detected_stdin_under_the_rate_limit_is_rendered_whole() {
+    let input = example_contents("stats_access.log");
+
+    let output = run_splash_with_stdin_args(
+        &["--auto", "--output", "plain", "--rate-limit", "1000"],
+        &input,
+    )
+    .unwrap();
+
+    assert_eq!(output, input);
+}
+
+#[test]
+fn test_a_rate_limit_of_zero_is_rejected() {
+    let output = run_splash(&["--rate-limit", "0"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--rate-limit <LINES>"));
+}
+
+#[test]
+fn test_a_rate_limit_cannot_be_combined_with_the_curses_viewer() {
+    let output = run_splash(&["--rate-limit", "10", "--output", "curses"]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: --rate-limit cannot be combined with the curses viewer\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_new_rate_limit_window_keeps_lines_again() {
+    let (output, errors) = follow_file_with_errors(
+        &["--mode", "ad-hoc", "--output", "plain", "--rate-limit", "1"],
+        b"one\ntwo\nthree\n",
+        Some(&|log: &Path| {
+            thread::sleep(splash::rate::WINDOW + Duration::from_millis(100));
+            append_to(log, "four\n");
+        }),
+    );
+
+    assert_eq!(output, "one\nfour\n");
+    assert_eq!(errors, "Dropped 2 lines over the limit of 1 per second\n");
+}
+
+// ==================== Stdin Streaming Tests ====================
+
+/// Starts splash reading a pipe that stays open, writes `input` to it, and
+/// waits for the output those lines produce
+#[cfg(unix)]
+fn stream_stdin_example(
+    args: &[&str],
+    input: &str,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    mpsc::Receiver<Vec<u8>>,
+    Vec<u8>,
+) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    stdin.write_all(input.as_bytes()).unwrap();
+    stdin.flush().unwrap();
+
+    let mut output = Vec::new();
+
+    if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+        output.extend(chunk);
+
+        while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+            output.extend(chunk);
+        }
+    }
+
+    (child, stdin, receiver, output)
+}
+
+#[cfg(unix)]
+fn interrupt(child: &std::process::Child) {
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+}
+
+#[test]
+fn test_invalid_bytes_on_stdin_are_replaced_and_later_lines_are_rendered() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--mode", "ad-hoc", "--output", "plain"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&std::fs::read(example_path("stdin_invalid_bytes.log")).unwrap())
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "connection from 10.0.0.5 \u{fffd}\u{fffd} accepted\nconnection from 10.0.0.7 closed\n"
+    );
+}
+
+#[test]
+fn test_a_path_of_dash_reads_stdin() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "plain", "--path", "-"],
+        &example_contents("adhoc_ips.log"),
+    )
+    .unwrap();
+
+    assert_eq!(output, example_contents("adhoc_ips.log"));
+}
+
+#[test]
+fn test_crlf_line_endings_on_stdin_are_dropped() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        "first line\r\nsecond line\r\n",
+    )
+    .unwrap();
+
+    assert_eq!(output, "first line\nsecond line\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_splash_stops_quietly_when_the_reader_of_its_output_exits() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--mode", "httpd"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let input = example_contents("stats_access.log").repeat(5000);
+
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+
+    let mut first_output = [0u8; 1024];
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_exact(&mut first_output)
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+
+    assert_eq!(output.status.signal(), Some(libc::SIGPIPE));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_summary_is_written_when_reading_stdin_is_interrupted() {
+    let (mut child, stdin, receiver, mut output) = stream_stdin_example(
+        &[
+            "--summary",
+            "--output",
+            "plain",
+            "--mode",
+            "httpd",
+            "--tz",
+            "UTC",
+        ],
+        &example_contents("stats_access.log"),
+    );
+
+    interrupt(&child);
+    drop(stdin);
+
+    assert!(child.wait().unwrap().success());
+
+    while let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+        output.extend(chunk);
+    }
+
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(output.contains("/api/queue/91"));
+    assert!(output.ends_with("To:          2023-10-03T14:10:01Z\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_second_interrupt_stops_reading_stdin_at_once() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let (mut child, _stdin, _receiver, _output) = stream_stdin_example(
+        &[
+            "--summary",
+            "--output",
+            "plain",
+            "--mode",
+            "httpd",
+            "--tz",
+            "UTC",
+        ],
+        &example_contents("stats_access.log"),
+    );
+
+    let status = loop {
+        interrupt(&child);
+
+        match child.try_wait().unwrap() {
+            Some(status) => break status,
+            None => thread::sleep(OUTPUT_QUIET_PERIOD),
+        }
+    };
+
+    assert_eq!(status.signal(), Some(libc::SIGINT));
 }
 
 // ==================== Viewer Terminal Tests ====================
@@ -6730,6 +7378,38 @@ fn test_the_viewer_shows_a_piped_log() {
         &["--output", "curses", "--mode", "httpd"],
         Some(&example_contents("stats_access.log")),
     );
+
+    run.wait_for("lines 1-6 of 6");
+    run.type_keys("q");
+
+    assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_lines_received_over_the_network() {
+    let mut run = TerminalRun::start(
+        &[
+            "--output",
+            "curses",
+            "--mode",
+            "httpd",
+            "--listen",
+            "127.0.0.1:0",
+        ],
+        None,
+    );
+
+    run.wait_for("Listening on 127.0.0.1:");
+    run.wait_for("\n");
+
+    let announced = run.drawn.split("Listening on ").nth(1).unwrap();
+    let address = announced.split_whitespace().next().unwrap().to_string();
+
+    std::net::TcpStream::connect(address)
+        .unwrap()
+        .write_all(example_contents("stats_access.log").as_bytes())
+        .unwrap();
 
     run.wait_for("lines 1-6 of 6");
     run.type_keys("q");

@@ -15,6 +15,9 @@ cargo install --path .
 # Colorize a log file (Common Log Format)
 splash --mode clf --path /var/log/apache2/access.log
 
+# Keep colorizing new lines as the log grows, as tail -f does
+splash --mode syslog --path /var/log/syslog --follow
+
 # Colorize Apache and nginx access and error logs
 splash --mode httpd --path /var/log/nginx/error.log
 
@@ -87,6 +90,12 @@ splash --auto --path /var/log/mail.log
 # Colorize with ad-hoc mode (auto-detects patterns)
 splash --mode ad-hoc --path /var/log/syslog
 
+# Receive log lines over TCP or HTTP
+splash --mode syslog --listen :8080
+
+# Also send the output to browsers over WebSocket
+splash --mode syslog --path /var/log/syslog --follow --output json --websocket :8081
+
 # Pipe from stdin
 tail -f /var/log/nginx/access.log | splash --mode clf
 
@@ -111,7 +120,14 @@ Options:
                                          syslog, systemd-resolved, terraform, ulogd, varnish, vsftpd,
                                          xferlog, ad-hoc, auto)
       --auto                             Detect the log format from the first lines of the input
-  -p, --path <PATH>                      Path to the log file
+  -p, --path <PATH>                      Path to the log file, or - to read stdin
+  -f, --follow                           Keep reading the --path file as it grows, as tail -f does
+      --listen <ADDRESS>                 Receive log lines over TCP or HTTP on this address, such as
+                                         :8080 or 127.0.0.1:8080
+      --websocket <ADDRESS>              Also send each line of output to WebSocket clients on this
+                                         address, such as :8081
+      --rate-limit <LINES>               Keep at most this many input lines each second, dropping the
+                                         rest
   -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain)
   -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
                                          core)
@@ -157,6 +173,132 @@ Options:
   -h, --help                             Print help
   -V, --version                          Print version
 ```
+
+---
+
+## Reading stdin
+
+With no `--path`, or with `--path -`, splash reads stdin and writes each line as it arrives, so it
+can sit at the end of a pipe that keeps writing:
+
+```bash
+tail -f /var/log/nginx/access.log | splash --mode httpd --summary
+```
+
+Lines may end in LF or CRLF. Bytes that are not valid UTF-8 are written as U+FFFD and the lines
+after them are rendered as usual.
+
+Ctrl-C does not stop splash at once. It keeps reading until the pipe closes, which happens when
+Ctrl-C also stops the program writing to it, and then writes what it writes at the end of its
+input: the `--summary`, or the end of the HTML document. A second Ctrl-C stops splash at once.
+
+When the program reading splash's output exits, as `head` does, splash stops without an error
+message.
+
+---
+
+## Following a file
+
+A `--path` file is rendered once, and splash exits. With `--follow` (`-f`), splash renders the
+file, then keeps watching it and renders each line the file gains, until Ctrl-C or `kill` stops it:
+
+```bash
+splash --mode httpd --path /var/log/nginx/access.log --follow
+```
+
+A line is rendered once its line break arrives, so a line the program writing the log has only
+partly written is not split in two. When splash is stopped, an unfinished last line is rendered
+and then what splash writes at the end of its input. A file that shrinks was truncated, and is read
+again from its beginning. `--follow` needs `--path`, since splash already renders stdin as it
+arrives.
+
+The curses viewer follows its input whether or not `--follow` is given.
+
+---
+
+## Receiving logs over the network
+
+`--listen ADDRESS` has splash accept connections and render the lines they send, until Ctrl-C or
+`kill` stops it. `:8080` listens on every interface, and `127.0.0.1:8080` on one. Port 0 asks the
+system for a free port. splash names the address it listens on on stderr:
+
+```
+Listening on 0.0.0.0:8080
+```
+
+A connection can send lines as raw TCP, closing the connection when done:
+
+```bash
+tail -f /var/log/syslog | nc localhost 8080
+```
+
+or as the body of an HTTP `POST` or `PUT` request. A body with a `Content-Length` or sent with
+chunked transfer encoding is read as it arrives, so a request can stream a log that is still being
+written:
+
+```bash
+curl --data-binary @/var/log/syslog http://localhost:8080/
+tail -f /var/log/syslog | curl -T - http://localhost:8080/
+```
+
+splash answers a request whose body it read with `204 No Content`, a request with another method
+with `405 Method Not Allowed`, a body with neither length nor chunked encoding with
+`411 Length Required`, and a malformed length or chunk size with `400 Bad Request`. A connection
+whose first line is not an HTTP request line is read as raw TCP.
+
+Each connection is read on its own thread, and lines from different connections are rendered whole
+in the order they arrive. In auto mode, the first lines received decide the mode. When stopped,
+splash writes what it writes at the end of its input, such as the `--summary`. `--listen` cannot be
+combined with `--path`, and the curses viewer shows lines as they are received.
+
+---
+
+## Sending output over WebSocket
+
+`--websocket ADDRESS` sends each line splash writes to every WebSocket client connected to
+ADDRESS, as a text message, while still writing it to stdout. `:8081` listens on every interface,
+and `127.0.0.1:8081` on one. splash names the address on stderr:
+
+```
+Sending WebSocket output on 0.0.0.0:8081
+```
+
+A page in a browser receives the lines with:
+
+```js
+const socket = new WebSocket("ws://localhost:8081/");
+socket.onmessage = (event) => console.log(JSON.parse(event.data));
+```
+
+The messages are in the `--output` format, so `--output json` gives the page one JSON object per
+line and `--output html` gives it the markup of each line. A client receives the lines written
+after it connects. Clients only receive: frames a client sends are not read. When a client stops
+reading and a send to it waits more than a second, the client is dropped, so a stalled browser
+does not hold up the output. A request that
+is not a WebSocket handshake is answered with `426 Upgrade Required`. The curses viewer writes no
+output to send, so `--websocket` cannot be combined with `--output curses`.
+
+---
+
+## Rate limiting
+
+`--rate-limit N` keeps at most N input lines in each one-second window and drops the rest, so a
+burst on a high-volume stream does not flood the terminal:
+
+```bash
+kubectl logs -f deploy/api | splash --mode kubernetes --rate-limit 200
+```
+
+A window starts with the first line that arrives after the window before it ended. When a window
+has dropped lines, splash reports the count on stderr, keeping stdout in the output format:
+
+```
+Dropped 1840 lines over the limit of 200 per second
+```
+
+The limit counts input lines before filters, `--stats`, and `--summary` see them, so dropped lines
+are not counted in the statistics. A `--path` file without `--follow` arrives all at once, so only
+its first N lines are kept. The curses viewer cannot be combined with `--rate-limit`.
 
 ---
 
@@ -425,7 +567,7 @@ address,10.0.0.5,3
 ```
 
 Reading from standard input, splash writes the report or summary when the input ends. Following
-a file with `--path`, it writes the `--stats` or `--histogram` report again each time the file
+a file with `--follow`, it writes the `--stats` or `--histogram` report again each time the file
 grows, and writes the summary when it is stopped with Ctrl-C or `kill`. The curses viewer does
 not show statistics, so `--output curses` cannot be combined with them.
 
@@ -1652,7 +1794,7 @@ Parsed tokens borrow the text of the line they came from, so a line is read once
 on its way to the renderer. Patterns are compiled the first time they are needed and kept for the
 rest of the run, and patterns supplied at run time are cached by `parser::cached_pattern`.
 
-Files are read whole and rendered before splash starts watching for new lines. A file of 64 KiB or
+Files are read whole and rendered before `--follow` starts watching for new lines. A file of 64 KiB or
 more is memory mapped rather than read into memory, and its lines are split across worker threads.
 `--jobs N` sets the worker count, which defaults to one per core. Inputs under 512 lines are
 rendered on one thread, where splitting the work costs more than it saves.
@@ -1741,9 +1883,11 @@ on yours before drawing conclusions from them.
 - Quotes and brackets
 
 **Input Sources**
-- File input with live watching
+- File input, followed as it grows with `--follow`
 - Memory-mapped reads for files of 64 KiB or more
 - Stdin streaming
+- Lines received over TCP and HTTP with `--listen`
+- Rate limiting of input lines with `--rate-limit`
 
 **Performance**
 - Parsing that borrows the input rather than copying it
@@ -1764,6 +1908,7 @@ on yours before drawing conclusions from them.
 - HTML with a customizable stylesheet
 - JSON with named token kinds
 - Plain text
+- ANSI, HTML, JSON, or plain output sent to browsers over WebSocket with `--websocket`
 
 ---
 

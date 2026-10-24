@@ -10,21 +10,26 @@ use splash::dates::DateOptions;
 use splash::detect;
 use splash::discovery::PluginDiscovery;
 use splash::filter::{Entry, FilterOptions};
+use splash::listen;
+use splash::rate::RateLimit;
 use splash::registry::PluginRegistry;
-use splash::source::LogFile;
+use splash::source::{self, Follower, LogFile};
 use splash::stats::{self, Stats, StatsOptions};
 use splash::tail::Tail;
 use splash::tui;
+use splash::websocket::{self, Broadcaster};
 use splash::{
     closing, opening, plugin_summary, profile_summary, progress, render_contents_counted,
     resolve_file_settings, theme_summary,
 };
-use std::fs::{self, File};
-use std::io::{self, IsTerminal, Read, Seek, SeekFrom};
+use std::borrow::Cow;
+use std::fs;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// How often a followed file checks whether splash was interrupted
 const INTERRUPT_POLL: Duration = Duration::from_millis(100);
@@ -32,8 +37,31 @@ const INTERRUPT_POLL: Duration = Duration::from_millis(100);
 /// How long the viewer waits for a key before checking the log for new lines
 const VIEWER_POLL: Duration = Duration::from_millis(250);
 
-/// Set when splash is asked to stop while following a file
+/// The `--path` that names standard input
+const STDIN_PATH: &str = "-";
+
+/// Explains why the curses viewer cannot be combined with --websocket
+const WEBSOCKET_NEEDS_STDOUT: &str =
+    "--websocket sends the output splash writes, and the curses viewer writes none";
+
+/// Explains why the curses viewer cannot be combined with --rate-limit
+const RATE_LIMIT_NEEDS_STDOUT: &str = "--rate-limit cannot be combined with the curses viewer";
+
+/// The limit on input lines per second, when --rate-limit is given
+static RATE_LIMIT: OnceLock<Mutex<RateLimit>> = OnceLock::new();
+
+/// The WebSocket clients output is also sent to, when --websocket is given
+static BROADCASTER: OnceLock<Arc<Broadcaster>> = OnceLock::new();
+
+/// Set when splash is asked to stop while following a file or reading stdin
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// Where splash reads log lines from
+enum Input<'a> {
+    Stdin,
+    File { path: &'a str, follow: bool },
+    Network(&'a str),
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -50,9 +78,25 @@ struct Args {
     #[arg(long, conflicts_with = "mode")]
     auto: bool,
 
-    /// Path to the log file
+    /// Path to the log file, or - to read stdin
     #[arg(short, long)]
     path: Option<String>,
+
+    /// Keep reading the --path file as it grows, as tail -f does
+    #[arg(short, long, requires = "path")]
+    follow: bool,
+
+    /// Receive log lines over TCP or HTTP on this address, such as :8080 or 127.0.0.1:8080
+    #[arg(long, value_name = "ADDRESS", conflicts_with = "path")]
+    listen: Option<String>,
+
+    /// Also send each line of output to WebSocket clients on this address, such as :8081
+    #[arg(long, value_name = "ADDRESS")]
+    websocket: Option<String>,
+
+    /// Keep at most this many input lines each second, dropping the rest
+    #[arg(long, value_name = "LINES", value_parser = clap::value_parser!(u64).range(1..))]
+    rate_limit: Option<u64>,
 
     /// Output format (ansi, curses, html, json, plain)
     #[arg(short, long)]
@@ -172,6 +216,8 @@ struct Args {
 }
 
 fn main() {
+    stop_quietly_on_a_closed_pipe();
+
     let args = Args::parse();
 
     let config = match load_config(args.config.as_deref()) {
@@ -269,31 +315,69 @@ fn main() {
         println!("Note: Specific plugin selection will be available in a future version");
     }
 
-    run(args.path.as_deref(), &settings);
+    let input = match (args.listen.as_deref(), args.path.as_deref()) {
+        (Some(address), _) => Input::Network(address),
+        (None, Some(path)) if path != STDIN_PATH => Input::File {
+            path,
+            follow: args.follow,
+        },
+        _ => Input::Stdin,
+    };
+
+    if let Some(per_second) = args.rate_limit {
+        if settings.output_mode.is_interactive() {
+            fail(RATE_LIMIT_NEEDS_STDOUT);
+        }
+
+        let _ = RATE_LIMIT.set(Mutex::new(RateLimit::new(per_second as usize)));
+    }
+
+    if let Some(address) = args.websocket.as_deref() {
+        if settings.output_mode.is_interactive() {
+            fail(WEBSOCKET_NEEDS_STDOUT);
+        }
+
+        match websocket::start(address) {
+            Ok((bound, broadcaster)) => {
+                eprintln!("Sending WebSocket output on {}", bound);
+                let _ = BROADCASTER.set(broadcaster);
+            }
+            Err(e) => fail(&format!("Cannot listen on {}: {}", address, e)),
+        }
+    }
+
+    run(&input, &settings);
 }
 
-fn run(path: Option<&str>, settings: &Settings) {
+fn run(input: &Input, settings: &Settings) {
     let mode = settings.mode.as_str();
     let output_mode = settings.output_mode;
 
     if output_mode.is_interactive() {
-        if let Err(e) = view(path, settings) {
+        if let Err(e) = view(input, settings) {
             fail(&e.to_string());
         }
 
         return;
     }
 
-    match path {
-        Some(p) => {
-            if let Err(e) = watch(p, settings) {
+    match *input {
+        Input::File { path, follow } => {
+            if let Err(e) = render_path(path, follow, settings) {
                 fail(&format!("{:?}", e));
             }
         }
-        None => {
-            print!("{}", opening(settings));
+        Input::Network(address) => {
+            if let Err(e) = render_network(address, settings) {
+                fail(&e.to_string());
+            }
+        }
+        Input::Stdin => {
+            catch_interrupts();
 
-            let mut lines = io::stdin().lines().map(|line| line.unwrap());
+            emit(&opening(settings));
+
+            let mut lines = source::lines(io::stdin().lock());
             let mut settings = settings.clone();
             let mut entry = Entry::default();
             let mut stats = Stats::default();
@@ -303,21 +387,23 @@ fn run(path: Option<&str>, settings: &Settings) {
                 let sample = sample.join("\n");
 
                 settings.mode = detect::resolve_mode(mode, &sample);
-                print!(
-                    "{}",
-                    render_contents_counted(&sample, &settings, &mut entry, &mut stats)
-                );
+                let kept = rate_limited(&sample);
+
+                emit(&render_contents_counted(
+                    &kept, &settings, &mut entry, &mut stats,
+                ));
             }
 
             for line in lines {
-                print!(
-                    "{}",
-                    render_contents_counted(&line, &settings, &mut entry, &mut stats)
-                );
+                let kept = rate_limited(&line);
+
+                emit(&render_contents_counted(
+                    &kept, &settings, &mut entry, &mut stats,
+                ));
             }
 
-            print!("{}", progress(&settings, &stats));
-            print!("{}", closing(&settings, &stats));
+            emit(&progress(&settings, &stats));
+            emit_closing(&settings, &stats);
         }
     }
 }
@@ -334,8 +420,22 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
+/// Renders a log file, then, when following, the lines it gains until
+/// splash is interrupted
+fn render_path<P: AsRef<Path>>(path: P, follow: bool, settings: &Settings) -> notify::Result<()> {
     let settings = &resolve_file_settings(path.as_ref(), settings)?;
+    let mut entry = Entry::default();
+    let mut stats = Stats::default();
+
+    if !follow {
+        let log = LogFile::open(path.as_ref())?;
+
+        emit(&opening(settings));
+        write_rendered(log.text(), settings, &mut entry, &mut stats);
+        emit_closing(settings, &stats);
+
+        return Ok(());
+    }
 
     catch_interrupts();
 
@@ -349,59 +449,108 @@ fn watch<P: AsRef<Path>>(path: P, settings: &Settings) -> notify::Result<()> {
 
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
 
-    print!("{}", opening(settings));
+    emit(&opening(settings));
 
-    let mut entry = Entry::default();
-    let mut stats = Stats::default();
     let log = LogFile::open(path.as_ref())?;
-    print!(
-        "{}",
-        render_contents_counted(log.text(), settings, &mut entry, &mut stats)
-    );
-    print!("{}", progress(settings, &stats));
-    let mut pos = fs::metadata(&path)?.len();
-    let mut contents = String::new();
+    let text = log.text();
+    let complete = text.rfind('\n').map_or(0, |end| end + 1);
+
+    write_rendered(&text[..complete], settings, &mut entry, &mut stats);
+
+    let mut follower = Follower::new(path.as_ref().to_path_buf(), fs::metadata(&path)?.len());
+    let mut pending = text.as_bytes()[complete..].to_vec();
 
     while !INTERRUPTED.load(Ordering::SeqCst) {
+        // The watcher holds the sender, so receiving can only time out
         match rx.recv_timeout(INTERRUPT_POLL) {
-            // inotify reports the open below, which must not trigger another read
+            // inotify reports the open a read makes, which must not trigger another read
             Ok(Ok(event)) if event.kind.is_access() => {}
-            Ok(_) => {
-                let mut f = File::open(&path).unwrap();
-                f.seek(SeekFrom::Start(pos)).unwrap();
+            Ok(_) => follower.read(&mut pending)?,
+            Err(_) => {}
+        }
 
-                pos = f.metadata().unwrap().len();
-
-                contents.clear();
-                f.read_to_string(&mut contents).unwrap();
-
-                if contents.is_empty() {
-                    continue;
-                }
-
-                print!(
-                    "{}",
-                    render_contents_counted(&contents, settings, &mut entry, &mut stats)
-                );
-                print!("{}", progress(settings, &stats));
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(e) => fail(&format!("{:?}", e)),
+        if let Some(lines) = source::take_complete_lines(&mut pending) {
+            write_rendered(&lines, settings, &mut entry, &mut stats);
         }
     }
 
-    print!("{}", closing(settings, &stats));
+    if !pending.is_empty() {
+        let rest = String::from_utf8_lossy(&pending);
+
+        write_rendered(&rest, settings, &mut entry, &mut stats);
+    }
+
+    emit_closing(settings, &stats);
 
     Ok(())
+}
+
+/// Renders the lines connections send until splash is interrupted. Lines
+/// that arrive together are rendered together, and in auto mode the first
+/// of them decide the mode.
+fn render_network(address: &str, settings: &Settings) -> io::Result<()> {
+    let lines = listen_on(address)?;
+    let mut settings = settings.clone();
+    let mut entry = Entry::default();
+    let mut stats = Stats::default();
+
+    catch_interrupts();
+
+    emit(&opening(&settings));
+
+    while !INTERRUPTED.load(Ordering::SeqCst) {
+        let Ok(first) = lines.recv_timeout(INTERRUPT_POLL) else {
+            continue;
+        };
+
+        let arrived: Vec<String> = std::iter::once(first).chain(lines.try_iter()).collect();
+        let text = arrived.join("\n");
+
+        settings.mode = detect::resolve_mode(&settings.mode, &text);
+        write_rendered(&text, &settings, &mut entry, &mut stats);
+    }
+
+    emit_closing(&settings, &stats);
+
+    Ok(())
+}
+
+/// Starts listening on `address`, and names the address bound on stderr,
+/// which gives the port chosen for port 0
+fn listen_on(address: &str) -> io::Result<mpsc::Receiver<String>> {
+    let (bound, lines) = listen::start(address)
+        .map_err(|e| io::Error::other(format!("Cannot listen on {}: {}", address, e)))?;
+
+    eprintln!("Listening on {}", bound);
+
+    Ok(lines)
+}
+
+/// Writes the rendered text, followed by the report that replaces the lines
+/// when there is one
+fn write_rendered(text: &str, settings: &Settings, entry: &mut Entry, stats: &mut Stats) {
+    let kept = rate_limited(text);
+    let rendered = render_contents_counted(&kept, settings, entry, stats);
+
+    emit(&rendered);
+    emit(&progress(settings, stats));
 }
 
 #[cfg(unix)]
 extern "C" fn note_interrupt(_signal: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
+
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    }
 }
 
 /// Has Ctrl-C or `kill` end the follow loop, so splash writes what it
-/// writes when its input ends
+/// writes when its input ends. Reading stdin, splash keeps reading until the
+/// pipe closes, which it does when Ctrl-C also stops the program writing it.
+/// The first interrupt restores the default action, so a second one stops
+/// splash at once.
 #[cfg(unix)]
 fn catch_interrupts() {
     let handler: extern "C" fn(libc::c_int) = note_interrupt;
@@ -415,19 +564,76 @@ fn catch_interrupts() {
 #[cfg(not(unix))]
 fn catch_interrupts() {}
 
+/// The lines of `text` the rate limit keeps. When a window that has ended
+/// dropped lines, the count is reported on stderr, keeping stdout in the
+/// output format.
+fn rate_limited(text: &str) -> Cow<'_, str> {
+    let Some(limit) = RATE_LIMIT.get() else {
+        return Cow::Borrowed(text);
+    };
+
+    let mut limit = limit.lock().unwrap();
+    let admitted = limit.admit(text, Instant::now());
+
+    if let Some(dropped) = admitted.dropped {
+        eprintln!("{}", limit.notice(dropped));
+    }
+
+    Cow::Owned(admitted.text)
+}
+
+/// Writes what splash writes when its input ends, after reporting the lines
+/// the last window of the rate limit dropped
+fn emit_closing(settings: &Settings, stats: &Stats) {
+    if let Some(limit) = RATE_LIMIT.get() {
+        let mut limit = limit.lock().unwrap();
+
+        if let Some(dropped) = limit.finish() {
+            eprintln!("{}", limit.notice(dropped));
+        }
+    }
+
+    emit(&closing(settings, stats));
+}
+
+/// Writes output to stdout and to any WebSocket clients
+fn emit(text: &str) {
+    print!("{}", text);
+
+    if let Some(broadcaster) = BROADCASTER.get() {
+        broadcaster.send(text);
+    }
+}
+
+/// Rust programs ignore SIGPIPE, which makes `print!` panic once the program
+/// reading splash's output, such as `head`, exits. With the default action,
+/// splash stops silently, as `cat` does.
+#[cfg(unix)]
+fn stop_quietly_on_a_closed_pipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn stop_quietly_on_a_closed_pipe() {}
+
 /// Reads the whole input and shows it in the scrollable viewer
-fn view(path: Option<&str>, settings: &Settings) -> io::Result<()> {
+fn view(input: &Input, settings: &Settings) -> io::Result<()> {
     if !io::stdout().is_terminal() {
         return Err(io::Error::other(tui::NEEDS_TERMINAL));
     }
 
-    let mut tail = match path {
-        Some(p) => Tail::file(
-            PathBuf::from(p),
-            resolve_file_settings(Path::new(p), settings)?,
+    let mut tail = match *input {
+        Input::File { path, .. } => Tail::file(
+            PathBuf::from(path),
+            resolve_file_settings(Path::new(path), settings)?,
         ),
-        None if io::stdin().is_terminal() => return Err(io::Error::other(tui::NEEDS_INPUT)),
-        None => Tail::stream(read_lines_in_background(), settings.clone()),
+        Input::Network(address) => Tail::stream(listen_on(address)?, settings.clone()),
+        Input::Stdin if io::stdin().is_terminal() => {
+            return Err(io::Error::other(tui::NEEDS_INPUT))
+        }
+        Input::Stdin => Tail::stream(read_lines_in_background(), settings.clone()),
     };
 
     let (_, rows) = terminal::size()?;
@@ -459,10 +665,7 @@ fn read_lines_in_background() -> mpsc::Receiver<String> {
     let (sender, receiver) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let _ = io::stdin()
-            .lines()
-            .map_while(Result::ok)
-            .try_for_each(|line| sender.send(line));
+        let _ = source::lines(io::stdin().lock()).try_for_each(|line| sender.send(line));
     });
 
     receiver

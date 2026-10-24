@@ -7,14 +7,14 @@ use crate::config::Settings;
 use crate::detect;
 use crate::filter::Entry;
 use crate::render_viewer_lines;
+use crate::source::{self, Follower};
 use crate::viewer::Line;
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
 enum Source {
-    File { path: PathBuf, position: u64 },
+    File(Follower),
     Stream(Receiver<String>),
 }
 
@@ -29,7 +29,7 @@ pub struct Tail {
 impl Tail {
     /// A tail over a file, starting at its beginning
     pub fn file(path: PathBuf, settings: Settings) -> Tail {
-        Tail::over(Source::File { path, position: 0 }, settings)
+        Tail::over(Source::File(Follower::new(path, 0)), settings)
     }
 
     /// A tail over the lines a stream sends, such as a pipe read on another
@@ -53,17 +53,7 @@ impl Tail {
     /// decide the mode.
     pub fn read(&mut self) -> io::Result<Vec<Line>> {
         match &mut self.source {
-            Source::File { path, position } => {
-                let mut file = File::open(path)?;
-
-                if file.metadata()?.len() < *position {
-                    *position = 0;
-                    self.pending.clear();
-                }
-
-                file.seek(SeekFrom::Start(*position))?;
-                *position += file.read_to_end(&mut self.pending)? as u64;
-            }
+            Source::File(follower) => follower.read(&mut self.pending)?,
             Source::Stream(lines) => {
                 for line in lines.try_iter() {
                     self.pending.extend(line.as_bytes());
@@ -72,12 +62,10 @@ impl Tail {
             }
         }
 
-        let Some(end) = self.pending.iter().rposition(|byte| *byte == b'\n') else {
+        let Some(text) = source::take_complete_lines(&mut self.pending) else {
             return Ok(Vec::new());
         };
 
-        let complete: Vec<u8> = self.pending.drain(..=end).collect();
-        let text = String::from_utf8_lossy(&complete);
         self.settings.mode = detect::resolve_mode(&self.settings.mode, &text);
 
         Ok(render_viewer_lines(&text, &self.settings, &mut self.entry))
