@@ -183,3 +183,107 @@ fn the_plugin_is_confident_about_a_log_made_only_of_lines_it_reads() {
 fn a_pair_without_a_style_is_message_text() {
     assert_eq!(kubernetes::value_kind("source", "api"), None);
 }
+
+const PREFIXED_KLOG: &str =
+    "[pod/web-0/app] I1003 12:00:01.123456       1 controller.go:123] Starting endpoint controller";
+
+const PREFIXED_TEXT: &str = "[pod/web-0/app] the maintenance window moves to 02:00";
+
+const PREFIXED_TIMESTAMPED_ACCESS: &str = r#"[pod/web-7d4b9c6f5-abcde/nginx] 2023-10-03T12:00:04.123456789Z 10.0.0.7 - - [03/Oct/2023:12:00:04 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0""#;
+
+const CRI_ACCESS: &str = r#"2023-10-03T12:00:02.234567890Z stdout F 10.0.0.5 - - [03/Oct/2023:12:00:02 +0000] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.28""#;
+
+fn display_kinds(line: &str) -> Vec<TokenKind> {
+    kubernetes::parse_display_line(line)
+        .tokens
+        .iter()
+        .map(|token| token.kind)
+        .filter(|kind| *kind != TokenKind::Plain)
+        .collect()
+}
+
+#[test]
+fn a_prefixed_line_colors_the_pod_and_container_tag() {
+    let parsed = kubernetes::parse_prefixed_line(PREFIXED_KLOG).unwrap();
+
+    assert_eq!(parsed.text(), PREFIXED_KLOG);
+    assert_eq!(parsed.tokens[0].text, "[pod/web-0/app]");
+    assert_eq!(parsed.tokens[0].kind, TokenKind::Module);
+    assert_eq!(parsed.tokens[2].kind, TokenKind::Level);
+}
+
+#[test]
+fn a_prefixed_line_of_free_text_colors_the_text_as_a_message() {
+    let parsed = kubernetes::parse_line(PREFIXED_TEXT).unwrap();
+
+    assert_eq!(parsed.tokens[2].kind, TokenKind::Message);
+}
+
+#[test]
+fn a_line_without_a_kubernetes_format_is_not_read() {
+    assert!(kubernetes::parse_line("the maintenance window moves to 02:00").is_none());
+}
+
+#[test]
+fn a_line_kubectl_printed_is_shown_as_text() {
+    assert_eq!(
+        display_kinds("the maintenance window moves to 02:00"),
+        [TokenKind::Message]
+    );
+}
+
+#[test]
+fn a_timestamped_klog_line_kubectl_printed_is_shown_as_klog() {
+    let line = "2023-10-03T12:00:01.123456789Z W1003 12:00:01.123456       1 leaderelection.go:250] lost lease";
+
+    assert_eq!(
+        display_kinds(line)[..2],
+        [TokenKind::Timestamp, TokenKind::Warning]
+    );
+}
+
+#[test]
+fn a_prefixed_timestamped_line_is_shown_in_the_container_format() {
+    let kinds = display_kinds(PREFIXED_TIMESTAMPED_ACCESS);
+
+    assert_eq!(
+        kinds[..3],
+        [TokenKind::Module, TokenKind::Timestamp, TokenKind::Client]
+    );
+    assert_eq!(
+        kubernetes::parse_display_line(PREFIXED_TIMESTAMPED_ACCESS).text(),
+        PREFIXED_TIMESTAMPED_ACCESS
+    );
+}
+
+#[test]
+fn a_cri_line_shows_the_container_line_in_its_own_format() {
+    assert!(display_kinds(CRI_ACCESS).contains(&TokenKind::Client));
+    assert!(!kinds(CRI_ACCESS).contains(&TokenKind::Client));
+}
+
+#[test]
+fn a_cri_klog_line_is_shown_as_klog() {
+    assert_eq!(
+        kubernetes::parse_display_line(CRI_KLOG).tokens,
+        kubernetes::parse_line(CRI_KLOG).unwrap().tokens
+    );
+}
+
+#[test]
+fn klog_and_syslog_lines_are_shown_as_they_are_read() {
+    for line in [PLAIN, SYSLOG] {
+        assert_eq!(
+            kubernetes::parse_display_line(line).tokens,
+            kubernetes::parse_line(line).unwrap().tokens
+        );
+    }
+}
+
+#[test]
+fn the_plugin_shows_every_line() {
+    assert!(matches!(
+        KubernetesPlugin::new().parse_display_line("the maintenance window moves to 02:00"),
+        ParseResult::Parsed(_)
+    ));
+}

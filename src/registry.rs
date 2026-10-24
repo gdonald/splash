@@ -450,3 +450,18 @@ static BUILTINS: LazyLock<PluginRegistry> = LazyLock::new(PluginRegistry::with_b
 pub fn builtins() -> &'static PluginRegistry {
     &BUILTINS
 }
+
+/// Other names `--mode` accepts for a plugin, as pairs of alias and name
+pub const MODE_ALIASES: [(&str, &str); 2] = [
+    ("k8s", crate::kubernetes::NAME),
+    ("systemd", crate::journalctl::NAME),
+];
+
+/// The plugin name a mode alias stands for, or the mode itself when it is
+/// not an alias
+pub fn canonical_mode(mode: &str) -> &str {
+    MODE_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == mode)
+        .map_or(mode, |(_, name)| name)
+}

@@ -860,8 +860,10 @@ fn the_docker_mode_parses_a_daemon_line() {
 }
 
 #[test]
-fn the_docker_mode_drops_a_line_that_is_not_a_docker_line() {
-    assert!(parse_line("the maintenance window moves to 02:00", "docker").is_none());
+fn the_docker_mode_keeps_a_line_a_container_printed() {
+    let parsed = parse_line("the maintenance window moves to 02:00", "docker").unwrap();
+
+    assert_eq!(parsed.text(), "the maintenance window moves to 02:00");
 }
 
 #[test]
@@ -876,8 +878,10 @@ fn the_kubernetes_mode_parses_a_klog_line() {
 }
 
 #[test]
-fn the_kubernetes_mode_drops_a_line_that_is_not_a_kubernetes_line() {
-    assert!(parse_line("the maintenance window moves to 02:00", "kubernetes").is_none());
+fn the_kubernetes_mode_keeps_a_line_a_container_printed() {
+    let parsed = parse_line("the maintenance window moves to 02:00", "kubernetes").unwrap();
+
+    assert_eq!(parsed.text(), "the maintenance window moves to 02:00");
 }
 
 #[test]

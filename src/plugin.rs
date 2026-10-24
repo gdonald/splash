@@ -102,6 +102,13 @@ pub trait Plugin: Send + Sync {
     /// Returns ParseResult indicating success, no match, or error
     fn parse_line<'a>(&self, line: &'a str) -> ParseResult<'a>;
 
+    /// Parses a line for rendering in this plugin's mode. Detection scores
+    /// plugins with `parse_line`, so a plugin whose input also holds lines
+    /// other programs printed reads those here.
+    fn parse_display_line<'a>(&self, line: &'a str) -> ParseResult<'a> {
+        self.parse_line(line)
+    }
+
     /// Returns true if this plugin can likely parse the given line
     /// Used for auto-detection. Default implementation tries to parse.
     fn can_parse(&self, line: &str) -> bool {

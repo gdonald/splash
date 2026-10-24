@@ -10,14 +10,20 @@ use splash::dates::DateOptions;
 use splash::detect;
 use splash::discovery::PluginDiscovery;
 use splash::filter::{Entry, FilterOptions};
-use splash::listen;
+use splash::forward::{Destination, Forwarder};
+use splash::listen::{self, Received};
+use splash::merge::{self, Log};
+use splash::output::{ParsedLine, Token, TokenKind};
 use splash::rate::RateLimit;
 use splash::registry::PluginRegistry;
 use splash::source::{self, Follower, LogFile};
 use splash::stats::{self, Stats, StatsOptions};
+use splash::syslog;
 use splash::tail::Tail;
+use splash::time;
 use splash::tui;
 use splash::websocket::{self, Broadcaster};
+use splash::zone::Zone;
 use splash::{
     closing, opening, plugin_summary, profile_summary, progress, render_contents_counted,
     resolve_file_settings, theme_summary,
@@ -50,6 +56,16 @@ const RATE_LIMIT_NEEDS_STDOUT: &str = "--rate-limit cannot be combined with the 
 /// The limit on input lines per second, when --rate-limit is given
 static RATE_LIMIT: OnceLock<Mutex<RateLimit>> = OnceLock::new();
 
+/// Explains why the curses viewer cannot be given several files
+const VIEWER_SHOWS_ONE_FILE: &str = "The curses viewer shows one file; give --path one file";
+
+/// Explains why the curses viewer cannot be combined with --forward
+const FORWARD_NEEDS_STDOUT: &str =
+    "--forward sends the output splash writes, and the curses viewer writes none";
+
+/// The destination output is also sent to, when --forward is given
+static FORWARDER: OnceLock<Forwarder> = OnceLock::new();
+
 /// The WebSocket clients output is also sent to, when --websocket is given
 static BROADCASTER: OnceLock<Arc<Broadcaster>> = OnceLock::new();
 
@@ -59,8 +75,12 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 /// Where splash reads log lines from
 enum Input<'a> {
     Stdin,
-    File { path: &'a str, follow: bool },
+    Files {
+        sources: Sources,
+        options: FileOptions,
+    },
     Network(&'a str),
+    Syslog(&'a str),
 }
 
 #[derive(Parser, Debug)]
@@ -68,9 +88,9 @@ enum Input<'a> {
 struct Args {
     /// Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf, cloud-init, cron, distcc, dmesg,
     /// docker, dovecot, elasticsearch, exim, fetchmail, ftpstats, git, haproxy, httpd, icecast,
-    /// journalctl, kubernetes, mongodb, mysql, nginx-error, oops, php, postfix, postgresql, procmail,
-    /// proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super, syslog, systemd-resolved,
-    /// terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
+    /// journalctl (or systemd), kubernetes (or k8s), mongodb, mysql, nginx-error, oops, php,
+    /// postfix, postgresql, procmail, proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super,
+    /// syslog, systemd-resolved, terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
     #[arg(short, long)]
     mode: Option<String>,
 
@@ -78,29 +98,54 @@ struct Args {
     #[arg(long, conflicts_with = "mode")]
     auto: bool,
 
-    /// Path to the log file, or - to read stdin
-    #[arg(short, long)]
-    path: Option<String>,
+    /// Paths to the log files, or - to read stdin. A file name may hold * and ?
+    #[arg(short, long, num_args = 1..)]
+    path: Vec<String>,
 
-    /// Keep reading the --path file as it grows, as tail -f does
+    /// Keep reading the --path files as they grow, as tail -f does
     #[arg(short, long, requires = "path")]
     follow: bool,
+
+    /// Interleave the lines of several --path files in time order, labeled with their file
+    #[arg(long, requires = "path")]
+    merge: bool,
+
+    /// Start each line with where it came from: its file, or the address that sent it
+    #[arg(long)]
+    label: bool,
+
+    /// Read the files in the subdirectories of a --path directory too
+    #[arg(short, long, requires = "path")]
+    recursive: bool,
 
     /// Receive log lines over TCP or HTTP on this address, such as :8080 or 127.0.0.1:8080
     #[arg(long, value_name = "ADDRESS", conflicts_with = "path")]
     listen: Option<String>,
 
+    /// Receive syslog messages over UDP and TCP on this address (default :514)
+    #[arg(long, value_name = "ADDRESS", num_args = 0..=1,
+          default_missing_value = listen::SYSLOG_ADDRESS, conflicts_with_all = ["path", "listen"])]
+    syslog: Option<String>,
+
     /// Also send each line of output to WebSocket clients on this address, such as :8081
     #[arg(long, value_name = "ADDRESS")]
     websocket: Option<String>,
+
+    /// Also send each line of output to tcp://HOST:PORT, udp://HOST:PORT, or http://HOST:PORT/PATH
+    #[arg(long, value_name = "URL")]
+    forward: Option<String>,
 
     /// Keep at most this many input lines each second, dropping the rest
     #[arg(long, value_name = "LINES", value_parser = clap::value_parser!(u64).range(1..))]
     rate_limit: Option<u64>,
 
-    /// Output format (ansi, curses, html, json, plain)
+    /// Output format (ansi, csv, curses, html, json, jsonl, plain)
     #[arg(short, long)]
     output: Option<String>,
+
+    /// Fields csv and jsonl output write, as FIELD,FIELD (repeatable)
+    #[arg(long, value_name = "FIELDS")]
+    fields: Vec<String>,
 
     /// Worker threads used to render a file (default: one per core)
     #[arg(short, long)]
@@ -169,6 +214,10 @@ struct Args {
     /// Keep only lines holding a field with this value, as KEY=VALUE (repeatable)
     #[arg(long, value_name = "KEY=VALUE")]
     filter: Vec<String>,
+
+    /// Mask IP addresses, email addresses, and user names
+    #[arg(long)]
+    anonymize: bool,
 
     /// Rewrite timestamps written as seconds since the epoch as dates
     #[arg(long)]
@@ -249,10 +298,11 @@ fn main() {
         return;
     }
 
-    let mode = if args.auto {
-        Some(detect::AUTO.to_string())
-    } else {
-        args.mode
+    let mode = match (args.auto, args.mode, args.syslog.is_some()) {
+        (true, _, _) => Some(detect::AUTO.to_string()),
+        (false, Some(mode), _) => Some(mode),
+        (false, None, true) => Some(syslog::NAME.to_string()),
+        (false, None, false) => None,
     };
 
     let options = Options {
@@ -282,6 +332,8 @@ fn main() {
             (_, true) => Some(false),
             _ => None,
         },
+        fields: args.fields,
+        anonymize: args.anonymize,
         stats: StatsOptions {
             stats: args.stats,
             summary: args.summary,
@@ -315,13 +367,22 @@ fn main() {
         println!("Note: Specific plugin selection will be available in a future version");
     }
 
-    let input = match (args.listen.as_deref(), args.path.as_deref()) {
-        (Some(address), _) => Input::Network(address),
-        (None, Some(path)) if path != STDIN_PATH => Input::File {
-            path,
-            follow: args.follow,
+    let input = match (args.syslog.as_deref(), args.listen.as_deref()) {
+        (Some(address), _) => Input::Syslog(address),
+        (None, Some(address)) => Input::Network(address),
+        _ if args.path.is_empty() || args.path == [STDIN_PATH] => Input::Stdin,
+        _ => match expand_paths(&args.path, args.recursive) {
+            Ok(sources) => Input::Files {
+                sources,
+                options: FileOptions {
+                    follow: args.follow,
+                    merge: args.merge,
+                    label: args.label,
+                    recursive: args.recursive,
+                },
+            },
+            Err(e) => fail(&e.to_string()),
         },
-        _ => Input::Stdin,
     };
 
     if let Some(per_second) = args.rate_limit {
@@ -330,6 +391,20 @@ fn main() {
         }
 
         let _ = RATE_LIMIT.set(Mutex::new(RateLimit::new(per_second as usize)));
+    }
+
+    if let Some(url) = args.forward.as_deref() {
+        if settings.output_mode.is_interactive() {
+            fail(FORWARD_NEEDS_STDOUT);
+        }
+
+        match Destination::parse(url) {
+            Ok(destination) => {
+                let forwarder = Forwarder::start(destination, |failure| eprintln!("{}", failure));
+                let _ = FORWARDER.set(forwarder);
+            }
+            Err(e) => fail(&e.to_string()),
+        }
     }
 
     if let Some(address) = args.websocket.as_deref() {
@@ -346,10 +421,14 @@ fn main() {
         }
     }
 
-    run(&input, &settings);
+    run(&input, &settings, args.label);
+
+    if let Some(forwarder) = FORWARDER.get() {
+        forwarder.finish();
+    }
 }
 
-fn run(input: &Input, settings: &Settings) {
+fn run(input: &Input, settings: &Settings, label: bool) {
     let mode = settings.mode.as_str();
     let output_mode = settings.output_mode;
 
@@ -362,13 +441,25 @@ fn run(input: &Input, settings: &Settings) {
     }
 
     match *input {
-        Input::File { path, follow } => {
-            if let Err(e) = render_path(path, follow, settings) {
+        Input::Files {
+            ref sources,
+            options,
+        } => {
+            if let Err(e) = render_paths(sources, options, settings) {
                 fail(&format!("{:?}", e));
             }
         }
         Input::Network(address) => {
-            if let Err(e) = render_network(address, settings) {
+            if let Err(e) =
+                listen_on(address).and_then(|lines| render_received(lines, label, settings))
+            {
+                fail(&e.to_string());
+            }
+        }
+        Input::Syslog(address) => {
+            if let Err(e) =
+                receive_syslog_on(address).and_then(|lines| render_received(lines, label, settings))
+            {
                 fail(&e.to_string());
             }
         }
@@ -420,64 +511,235 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Renders a log file, then, when following, the lines it gains until
-/// splash is interrupted
-fn render_path<P: AsRef<Path>>(path: P, follow: bool, settings: &Settings) -> notify::Result<()> {
-    let settings = &resolve_file_settings(path.as_ref(), settings)?;
-    let mut entry = Entry::default();
-    let mut stats = Stats::default();
+/// How the `--path` files are read
+#[derive(Debug, Clone, Copy)]
+struct FileOptions {
+    follow: bool,
+    merge: bool,
+    label: bool,
+    recursive: bool,
+}
 
-    if !follow {
-        let log = LogFile::open(path.as_ref())?;
+/// The files the `--path` values name, and the directories among them,
+/// whose files are read too
+#[derive(Debug, Default)]
+struct Sources {
+    files: Vec<PathBuf>,
+    directories: Vec<PathBuf>,
+}
 
-        emit(&opening(settings));
-        write_rendered(log.text(), settings, &mut entry, &mut stats);
-        emit_closing(settings, &stats);
+/// The files and directories the `--path` values name, with their patterns
+/// expanded and each directory's files listed
+fn expand_paths(values: &[String], recursive: bool) -> io::Result<Sources> {
+    let mut sources = Sources::default();
 
-        return Ok(());
+    for value in values {
+        for path in source::expand(value)? {
+            let found = if path.is_dir() {
+                let found = source::files_in(&path, recursive)?;
+                sources.directories.push(path);
+                found
+            } else {
+                vec![path]
+            };
+
+            for file in found {
+                if !sources.files.contains(&file) {
+                    sources.files.push(file);
+                }
+            }
+        }
     }
 
-    catch_interrupts();
+    Ok(sources)
+}
+
+/// A file splash renders, with the settings its own lines decide in auto
+/// mode and the entry its last line belonged to
+struct FileInput {
+    path: PathBuf,
+    settings: Settings,
+    entry: Entry,
+    follower: Follower,
+    /// The text after the last line break, rendered once its line is complete
+    pending: Vec<u8>,
+}
+
+/// A file to render, read from its beginning
+fn file_input(path: &Path, options: FileOptions, settings: &Settings) -> io::Result<FileInput> {
+    let settings = Settings {
+        source: (options.merge || options.label).then(|| source_label(path)),
+        ..resolve_file_settings(path, settings)?
+    };
+
+    Ok(FileInput {
+        path: path.to_path_buf(),
+        settings,
+        entry: Entry::default(),
+        follower: Follower::new(path.to_path_buf(), 0),
+        pending: Vec::new(),
+    })
+}
+
+/// The `==> PATH <==` header written before lines from one of several
+/// files, as tail writes it
+struct Headers {
+    several: bool,
+    last_shown: Option<usize>,
+}
+
+impl Headers {
+    /// Writes the header for a file when there are several files and the
+    /// last lines written came from another one
+    fn show(&mut self, index: usize, path: &Path, settings: &Settings) {
+        if !self.several || self.last_shown == Some(index) {
+            return;
+        }
+
+        self.last_shown = Some(index);
+
+        let header = Token::owned(format!("==> {} <==", path.display()), TokenKind::Header);
+        let line = ParsedLine::new(vec![header]);
+
+        emit(&format!(
+            "{}\n",
+            settings.output_mode.render(&line, &settings.theme)
+        ));
+    }
+}
+
+/// Renders log files one after another, or merged in time order, then,
+/// when following, the lines they gain until splash is interrupted
+fn render_paths(
+    sources: &Sources,
+    options: FileOptions,
+    settings: &Settings,
+) -> notify::Result<()> {
+    let FileOptions {
+        follow,
+        merge,
+        recursive,
+        ..
+    } = options;
+    let mut files = Vec::new();
+
+    for path in &sources.files {
+        files.push(file_input(path, options, settings)?);
+    }
+
+    let mut stats = Stats::default();
+    let mut headers = Headers {
+        several: (files.len() > 1 || !sources.directories.is_empty()) && !merge,
+        last_shown: None,
+    };
 
     let (tx, rx) = mpsc::channel();
+    let mut watcher = None;
 
-    let config = WatchConfig::default()
-        .with_poll_interval(Duration::from_secs(2))
-        .with_compare_contents(true);
+    if follow {
+        catch_interrupts();
 
-    let mut watcher = RecommendedWatcher::new(tx, config)?;
+        let config = WatchConfig::default()
+            .with_poll_interval(Duration::from_secs(2))
+            .with_compare_contents(true);
+        let watching = watcher.insert(RecommendedWatcher::new(tx, config)?);
 
-    watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
+        for path in &sources.files {
+            watching.watch(path, RecursiveMode::NonRecursive)?;
+        }
+
+        let depth = match recursive {
+            true => RecursiveMode::Recursive,
+            false => RecursiveMode::NonRecursive,
+        };
+
+        for directory in &sources.directories {
+            watching.watch(directory, depth)?;
+        }
+    }
 
     emit(&opening(settings));
 
-    let log = LogFile::open(path.as_ref())?;
-    let text = log.text();
-    let complete = text.rfind('\n').map_or(0, |end| end + 1);
+    let mut logs = Vec::new();
 
-    write_rendered(&text[..complete], settings, &mut entry, &mut stats);
+    for file in &files {
+        logs.push(LogFile::open(&file.path)?);
+    }
 
-    let mut follower = Follower::new(path.as_ref().to_path_buf(), fs::metadata(&path)?.len());
-    let mut pending = text.as_bytes()[complete..].to_vec();
+    let complete: Vec<&str> = logs
+        .iter()
+        .map(|log| match follow {
+            true => &log.text()[..log.text().rfind('\n').map_or(0, |end| end + 1)],
+            false => log.text(),
+        })
+        .collect();
 
-    while !INTERRUPTED.load(Ordering::SeqCst) {
+    if merge {
+        let modes: Vec<String> = files
+            .iter()
+            .map(|file| file.settings.mode.clone())
+            .collect();
+        let merging: Vec<Log> = complete
+            .iter()
+            .zip(&modes)
+            .map(|(text, mode)| Log { text, mode })
+            .collect();
+
+        for entry in merge::merge(&merging, &Zone::local(), time::now()) {
+            let file = &mut files[entry.log];
+
+            write_lines(entry.text, &file.settings, &mut file.entry, &mut stats);
+        }
+
+        emit(&progress(settings, &stats));
+    } else {
+        for (index, file) in files.iter_mut().enumerate() {
+            headers.show(index, &file.path, settings);
+            write_rendered(complete[index], &file.settings, &mut file.entry, &mut stats);
+        }
+    }
+
+    for (index, file) in files.iter_mut().enumerate() {
+        file.follower = Follower::new(file.path.clone(), fs::metadata(&file.path)?.len());
+        file.pending = logs[index].text().as_bytes()[complete[index].len()..].to_vec();
+    }
+
+    while follow && !INTERRUPTED.load(Ordering::SeqCst) {
         // The watcher holds the sender, so receiving can only time out
         match rx.recv_timeout(INTERRUPT_POLL) {
             // inotify reports the open a read makes, which must not trigger another read
             Ok(Ok(event)) if event.kind.is_access() => {}
-            Ok(_) => follower.read(&mut pending)?,
+            Ok(_) => {
+                for directory in &sources.directories {
+                    for path in source::files_in(directory, recursive).unwrap_or_default() {
+                        if !files.iter().any(|file| file.path == path) {
+                            files.push(file_input(&path, options, settings)?);
+                        }
+                    }
+                }
+
+                for file in &mut files {
+                    file.follower.read(&mut file.pending)?;
+                }
+            }
             Err(_) => {}
         }
 
-        if let Some(lines) = source::take_complete_lines(&mut pending) {
-            write_rendered(&lines, settings, &mut entry, &mut stats);
+        for (index, file) in files.iter_mut().enumerate() {
+            if let Some(lines) = source::take_complete_lines(&mut file.pending) {
+                headers.show(index, &file.path, settings);
+                write_rendered(&lines, &file.settings, &mut file.entry, &mut stats);
+            }
         }
     }
 
-    if !pending.is_empty() {
-        let rest = String::from_utf8_lossy(&pending);
+    for (index, file) in files.iter_mut().enumerate() {
+        if !file.pending.is_empty() {
+            let rest = String::from_utf8_lossy(&file.pending).into_owned();
 
-        write_rendered(&rest, settings, &mut entry, &mut stats);
+            headers.show(index, &file.path, settings);
+            write_rendered(&rest, &file.settings, &mut file.entry, &mut stats);
+        }
     }
 
     emit_closing(settings, &stats);
@@ -485,11 +747,14 @@ fn render_path<P: AsRef<Path>>(path: P, follow: bool, settings: &Settings) -> no
     Ok(())
 }
 
-/// Renders the lines connections send until splash is interrupted. Lines
-/// that arrive together are rendered together, and in auto mode the first
-/// of them decide the mode.
-fn render_network(address: &str, settings: &Settings) -> io::Result<()> {
-    let lines = listen_on(address)?;
+/// Renders the lines received over the network until splash is
+/// interrupted. Lines that arrive together are rendered together, and in
+/// auto mode the first of them decide the mode.
+fn render_received(
+    lines: mpsc::Receiver<Received>,
+    label: bool,
+    settings: &Settings,
+) -> io::Result<()> {
     let mut settings = settings.clone();
     let mut entry = Entry::default();
     let mut stats = Stats::default();
@@ -503,11 +768,26 @@ fn render_network(address: &str, settings: &Settings) -> io::Result<()> {
             continue;
         };
 
-        let arrived: Vec<String> = std::iter::once(first).chain(lines.try_iter()).collect();
-        let text = arrived.join("\n");
+        let arrived: Vec<Received> = std::iter::once(first).chain(lines.try_iter()).collect();
 
-        settings.mode = detect::resolve_mode(&settings.mode, &text);
-        write_rendered(&text, &settings, &mut entry, &mut stats);
+        for group in arrived.chunk_by(|one, next| one.sender == next.sender) {
+            let text: Vec<&str> = group
+                .iter()
+                .map(|received| received.line.as_str())
+                .collect();
+            let text = text.join("\n");
+
+            settings.mode = detect::resolve_mode(&settings.mode, &text);
+
+            let labeled = Settings {
+                source: label.then(|| group[0].sender.clone()),
+                ..settings.clone()
+            };
+
+            write_lines(&text, &labeled, &mut entry, &mut stats);
+        }
+
+        emit(&progress(&settings, &stats));
     }
 
     emit_closing(&settings, &stats);
@@ -517,7 +797,7 @@ fn render_network(address: &str, settings: &Settings) -> io::Result<()> {
 
 /// Starts listening on `address`, and names the address bound on stderr,
 /// which gives the port chosen for port 0
-fn listen_on(address: &str) -> io::Result<mpsc::Receiver<String>> {
+fn listen_on(address: &str) -> io::Result<mpsc::Receiver<Received>> {
     let (bound, lines) = listen::start(address)
         .map_err(|e| io::Error::other(format!("Cannot listen on {}: {}", address, e)))?;
 
@@ -526,14 +806,37 @@ fn listen_on(address: &str) -> io::Result<mpsc::Receiver<String>> {
     Ok(lines)
 }
 
+/// Starts receiving syslog messages on `address`, and names the address
+/// bound on stderr
+fn receive_syslog_on(address: &str) -> io::Result<mpsc::Receiver<Received>> {
+    let (bound, lines) = listen::start_syslog(address)
+        .map_err(|e| io::Error::other(format!("Cannot listen on {}: {}", address, e)))?;
+
+    eprintln!("Receiving syslog messages on {} (TCP and UDP)", bound);
+
+    Ok(lines)
+}
+
 /// Writes the rendered text, followed by the report that replaces the lines
 /// when there is one
 fn write_rendered(text: &str, settings: &Settings, entry: &mut Entry, stats: &mut Stats) {
-    let kept = rate_limited(text);
-    let rendered = render_contents_counted(&kept, settings, entry, stats);
-
-    emit(&rendered);
+    write_lines(text, settings, entry, stats);
     emit(&progress(settings, stats));
+}
+
+/// Writes the rendered text alone
+fn write_lines(text: &str, settings: &Settings, entry: &mut Entry, stats: &mut Stats) {
+    let kept = rate_limited(text);
+
+    emit(&render_contents_counted(&kept, settings, entry, stats));
+}
+
+/// The name a merged file's lines are labeled with: its file name
+fn source_label(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(unix)]
@@ -596,12 +899,17 @@ fn emit_closing(settings: &Settings, stats: &Stats) {
     emit(&closing(settings, stats));
 }
 
-/// Writes output to stdout and to any WebSocket clients
+/// Writes output to stdout, to any WebSocket clients, and to the forwarding
+/// destination
 fn emit(text: &str) {
     print!("{}", text);
 
     if let Some(broadcaster) = BROADCASTER.get() {
         broadcaster.send(text);
+    }
+
+    if let Some(forwarder) = FORWARDER.get() {
+        forwarder.send(text);
     }
 }
 
@@ -625,11 +933,17 @@ fn view(input: &Input, settings: &Settings) -> io::Result<()> {
     }
 
     let mut tail = match *input {
-        Input::File { path, .. } => Tail::file(
-            PathBuf::from(path),
-            resolve_file_settings(Path::new(path), settings)?,
+        Input::Files { ref sources, .. } if sources.files.len() != 1 => {
+            return Err(io::Error::other(VIEWER_SHOWS_ONE_FILE))
+        }
+        Input::Files { ref sources, .. } => Tail::file(
+            sources.files[0].clone(),
+            resolve_file_settings(&sources.files[0], settings)?,
         ),
-        Input::Network(address) => Tail::stream(listen_on(address)?, settings.clone()),
+        Input::Network(address) => Tail::stream(lines_of(listen_on(address)?), settings.clone()),
+        Input::Syslog(address) => {
+            Tail::stream(lines_of(receive_syslog_on(address)?), settings.clone())
+        }
         Input::Stdin if io::stdin().is_terminal() => {
             return Err(io::Error::other(tui::NEEDS_INPUT))
         }
@@ -657,6 +971,20 @@ fn view(input: &Input, settings: &Settings) -> io::Result<()> {
     disable_raw_mode()?;
 
     result
+}
+
+/// The lines received over the network, without the address that sent
+/// each one
+fn lines_of(received: mpsc::Receiver<Received>) -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let _ = received
+            .iter()
+            .try_for_each(|received| sender.send(received.line));
+    });
+
+    receiver
 }
 
 /// Sends each line of standard input as it arrives, so the viewer can show

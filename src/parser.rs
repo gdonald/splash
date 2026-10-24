@@ -117,7 +117,7 @@ pub fn parse_line<'a>(line: &'a str, mode: &str) -> Option<ParsedLine<'a>> {
     match mode {
         "clf" => parse_clf_line(line),
         _ => match registry::builtins().get(mode) {
-            Ok(plugin) => match plugin.parse_line(line) {
+            Ok(plugin) => match plugin.parse_display_line(line) {
                 ParseResult::Parsed(parsed) => Some(parsed),
                 ParseResult::NoMatch | ParseResult::Error(_) => None,
             },

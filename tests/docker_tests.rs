@@ -151,3 +151,69 @@ fn the_plugin_is_confident_about_a_log_made_only_of_lines_it_reads() {
         1.0
     );
 }
+
+const CONTAINER_ACCESS: &str = r#"10.0.0.5 - - [03/Oct/2023:12:00:01 +0000] "GET /index.html HTTP/1.1" 200 612 "-" "curl/8.4.0""#;
+
+const TIMESTAMPED_ACCESS: &str = r#"2023-10-03T12:00:01.123456789Z 10.0.0.5 - - [03/Oct/2023:12:00:01 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0""#;
+
+fn display_kinds(line: &str) -> Vec<TokenKind> {
+    docker::parse_display_line(line)
+        .tokens
+        .iter()
+        .map(|token| token.kind)
+        .filter(|kind| *kind != TokenKind::Plain)
+        .collect()
+}
+
+#[test]
+fn a_line_a_container_printed_is_not_read_as_a_docker_line() {
+    assert!(matches!(
+        DockerPlugin::new().parse_line(CONTAINER_ACCESS),
+        ParseResult::NoMatch
+    ));
+}
+
+#[test]
+fn a_line_a_container_printed_is_shown_in_its_own_format() {
+    let parsed = docker::parse_display_line(CONTAINER_ACCESS);
+
+    assert_eq!(parsed.text(), CONTAINER_ACCESS);
+    assert_eq!(parsed.tokens[0].kind, TokenKind::Client);
+}
+
+#[test]
+fn a_line_a_container_printed_in_no_known_format_is_shown_as_text() {
+    assert_eq!(
+        display_kinds("the maintenance window moves to 02:00"),
+        [TokenKind::Message]
+    );
+}
+
+#[test]
+fn a_timestamped_container_line_is_shown_in_its_own_format_after_the_time() {
+    let kinds = display_kinds(TIMESTAMPED_ACCESS);
+
+    assert_eq!(kinds[..2], [TokenKind::Timestamp, TokenKind::Client]);
+    assert_eq!(
+        docker::parse_display_line(TIMESTAMPED_ACCESS).text(),
+        TIMESTAMPED_ACCESS
+    );
+}
+
+#[test]
+fn docker_formats_are_shown_as_they_are_read() {
+    for line in [JSON_FILE, DAEMON, SYSLOG] {
+        assert_eq!(
+            docker::parse_display_line(line).tokens,
+            docker::parse_line(line).unwrap().tokens
+        );
+    }
+}
+
+#[test]
+fn the_plugin_shows_every_line() {
+    assert!(matches!(
+        DockerPlugin::new().parse_display_line("the maintenance window moves to 02:00"),
+        ParseResult::Parsed(_)
+    ));
+}

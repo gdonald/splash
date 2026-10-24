@@ -294,3 +294,18 @@ fn test_disabling_an_unregistered_plugin_reports_it_missing() {
 fn test_a_default_registry_is_empty() {
     assert_eq!(PluginRegistry::default().count(), 0);
 }
+
+#[test]
+fn k8s_is_another_name_for_the_kubernetes_mode() {
+    assert_eq!(splash::registry::canonical_mode("k8s"), "kubernetes");
+}
+
+#[test]
+fn systemd_is_another_name_for_the_journalctl_mode() {
+    assert_eq!(splash::registry::canonical_mode("systemd"), "journalctl");
+}
+
+#[test]
+fn a_mode_that_is_not_an_alias_is_kept() {
+    assert_eq!(splash::registry::canonical_mode("docker"), "docker");
+}

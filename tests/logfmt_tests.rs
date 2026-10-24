@@ -78,3 +78,16 @@ fn a_key_opening_with_an_at_sign_is_read() {
         Token::new("@module", TokenKind::Header)
     );
 }
+
+#[test]
+fn pairs_are_read_with_their_values_unquoted() {
+    assert_eq!(
+        splash::logfmt::pairs(r#"level=info msg="Starting up" empty="#),
+        [("level", "info"), ("msg", "Starting up"), ("empty", "")]
+    );
+}
+
+#[test]
+fn a_pair_inside_a_word_is_not_read() {
+    assert!(splash::logfmt::pairs("GET /search?q=1 HTTP/1.1").is_empty());
+}

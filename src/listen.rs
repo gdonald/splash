@@ -3,14 +3,25 @@
 //! A connection sends lines either as raw TCP, or as the bodies of HTTP POST
 //! or PUT requests. Each connection is read on its own thread and sends whole
 //! lines, so lines from different connections never mix.
+//!
+//! As a syslog receiver, splash takes messages over UDP, one per datagram
+//! (RFC 5426), and over TCP, each framed by an octet count or a line break
+//! (RFC 6587).
 use crate::source;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::sync::mpsc::{self, Receiver, SendError, Sender};
 use std::thread;
 
 /// The host a `--listen` address written as only `:PORT` binds to
 pub const ALL_INTERFACES: &str = "0.0.0.0";
+
+/// The address `--syslog` listens on when it names none: every interface,
+/// on the port syslog messages are sent to
+pub const SYSLOG_ADDRESS: &str = ":514";
+
+/// The largest UDP datagram
+const MAX_DATAGRAM: usize = 65535;
 
 /// The methods whose request bodies hold log lines
 const BODY_METHODS: [&str; 2] = ["POST", "PUT"];
@@ -19,6 +30,41 @@ const NO_CONTENT: &str = "204 No Content";
 const BAD_REQUEST: &str = "400 Bad Request";
 const METHOD_NOT_ALLOWED: &str = "405 Method Not Allowed";
 const LENGTH_REQUIRED: &str = "411 Length Required";
+
+/// A line received over the network, with the address of the host that
+/// sent it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Received {
+    pub sender: String,
+    pub line: String,
+}
+
+/// Where the lines of one connection go, with the address that sent them
+pub struct Lines<'a> {
+    sender: &'a Sender<Received>,
+    from: &'a str,
+}
+
+impl<'a> Lines<'a> {
+    pub fn new(sender: &'a Sender<Received>, from: &'a str) -> Lines<'a> {
+        Lines { sender, from }
+    }
+
+    fn send(&self, line: String) -> Result<(), SendError<Received>> {
+        self.sender.send(Received {
+            sender: self.from.to_string(),
+            line,
+        })
+    }
+}
+
+/// The address of the host at the other end of a connection
+fn peer(stream: &TcpStream) -> String {
+    stream
+        .peer_addr()
+        .map(|address| address.ip().to_string())
+        .unwrap_or_default()
+}
 
 /// The address to bind for a `--listen` address: `:PORT` names every
 /// interface, and `HOST:PORT` is kept
@@ -32,7 +78,7 @@ pub fn bind_address(address: &str) -> String {
 /// Listens on `address`, returning the address bound, which names the port
 /// chosen when `address` asks for port 0, and the lines every connection
 /// sends
-pub fn start(address: &str) -> io::Result<(SocketAddr, Receiver<String>)> {
+pub fn start(address: &str) -> io::Result<(SocketAddr, Receiver<Received>)> {
     let listener = TcpListener::bind(bind_address(address))?;
     let bound = listener.local_addr()?;
     let (sender, receiver) = mpsc::channel();
@@ -41,7 +87,7 @@ pub fn start(address: &str) -> io::Result<(SocketAddr, Receiver<String>)> {
         for stream in listener.incoming().flatten() {
             let sender = sender.clone();
 
-            thread::spawn(move || serve(&stream, &sender));
+            thread::spawn(move || serve(&stream, &Lines::new(&sender, &peer(&stream))));
         }
     });
 
@@ -51,7 +97,7 @@ pub fn start(address: &str) -> io::Result<(SocketAddr, Receiver<String>)> {
 /// Reads one connection, sending each line it holds. A connection whose
 /// first line is an HTTP request line is answered as HTTP, and any other
 /// connection is read as lines until it closes.
-pub fn serve<S: Read + Write>(stream: S, sender: &Sender<String>) -> io::Result<()> {
+pub fn serve<S: Read + Write>(stream: S, lines: &Lines) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut bytes = Vec::new();
 
@@ -60,9 +106,9 @@ pub fn serve<S: Read + Write>(stream: S, sender: &Sender<String>) -> io::Result<
     };
 
     match request_method(&first) {
-        Some(method) => serve_http(&method, reader, sender),
-        None if sender.send(first).is_err() => Ok(()),
-        None => send_lines(reader, sender),
+        Some(method) => serve_http(&method, reader, lines),
+        None if lines.send(first).is_err() => Ok(()),
+        None => send_lines(reader, lines),
     }
 }
 
@@ -90,9 +136,9 @@ enum Body {
 fn serve_http<S: Read + Write>(
     method: &str,
     mut reader: BufReader<S>,
-    sender: &Sender<String>,
+    lines: &Lines,
 ) -> io::Result<()> {
-    let status = match read_request(method, &mut reader, sender) {
+    let status = match read_request(method, &mut reader, lines) {
         Ok(status) => status,
         Err(error) if error.kind() == io::ErrorKind::InvalidData => BAD_REQUEST,
         Err(error) => return Err(error),
@@ -108,7 +154,7 @@ fn serve_http<S: Read + Write>(
 fn read_request<R: BufRead>(
     method: &str,
     reader: &mut R,
-    sender: &Sender<String>,
+    lines: &Lines,
 ) -> io::Result<&'static str> {
     let body = read_headers(reader)?;
 
@@ -118,8 +164,8 @@ fn read_request<R: BufRead>(
 
     match body {
         Body::Missing => return Ok(LENGTH_REQUIRED),
-        Body::Length(length) => send_lines(reader.take(length), sender)?,
-        Body::Chunked => send_lines(BufReader::new(Chunked::new(reader)), sender)?,
+        Body::Length(length) => send_lines(reader.take(length), lines)?,
+        Body::Chunked => send_lines(BufReader::new(Chunked::new(reader)), lines)?,
     }
 
     Ok(NO_CONTENT)
@@ -155,11 +201,11 @@ fn read_headers<R: BufRead>(reader: &mut R) -> io::Result<Body> {
 }
 
 /// Sends each line a reader holds until it ends or nothing receives them
-fn send_lines<R: BufRead>(mut reader: R, sender: &Sender<String>) -> io::Result<()> {
+fn send_lines<R: BufRead>(mut reader: R, lines: &Lines) -> io::Result<()> {
     let mut bytes = Vec::new();
 
     while let Some(line) = source::read_line(&mut reader, &mut bytes)? {
-        if sender.send(line).is_err() {
+        if lines.send(line).is_err() {
             break;
         }
     }
@@ -236,4 +282,80 @@ impl<R: BufRead> Read for Chunked<R> {
 
         Ok(count)
     }
+}
+
+/// Receives syslog messages over TCP and UDP on the same address, returning
+/// the address bound, which names the port chosen when `address` asks for
+/// port 0, and the lines of every message
+pub fn start_syslog(address: &str) -> io::Result<(SocketAddr, Receiver<Received>)> {
+    let listener = TcpListener::bind(bind_address(address))?;
+    let bound = listener.local_addr()?;
+    let socket = UdpSocket::bind(bound)?;
+    let (sender, receiver) = mpsc::channel();
+    let datagrams = sender.clone();
+
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let sender = sender.clone();
+
+            thread::spawn(move || serve_syslog(&stream, &Lines::new(&sender, &peer(&stream))));
+        }
+    });
+
+    thread::spawn(move || receive_datagrams(&socket, &datagrams));
+
+    Ok((bound, receiver))
+}
+
+/// Sends the lines of each datagram the socket receives, until nothing
+/// receives them
+pub fn receive_datagrams(socket: &UdpSocket, sender: &Sender<Received>) {
+    let mut buffer = vec![0u8; MAX_DATAGRAM];
+
+    while let Ok((count, from)) = socket.recv_from(&mut buffer) {
+        let from = from.ip().to_string();
+
+        if send_message(&buffer[..count], &Lines::new(sender, &from)).is_err() {
+            break;
+        }
+    }
+}
+
+/// Reads the syslog messages a TCP connection sends, sending each line they
+/// hold. A frame that opens with a digit gives the length of the message
+/// after a space, and any other frame ends at a line break.
+pub fn serve_syslog<R: Read>(stream: R, lines: &Lines) -> io::Result<()> {
+    let mut reader = BufReader::new(stream);
+    let mut bytes = Vec::new();
+
+    while let Some(first) = reader.fill_buf()?.first().copied() {
+        bytes.clear();
+
+        if first.is_ascii_digit() {
+            reader.read_until(b' ', &mut bytes)?;
+
+            let length = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| text.trim_end().parse::<usize>().ok())
+                .ok_or_else(|| invalid("syslog frame length is not a number"))?;
+
+            bytes.resize(length, 0);
+            reader.read_exact(&mut bytes)?;
+        } else {
+            reader.read_until(b'\n', &mut bytes)?;
+        }
+
+        if send_message(&bytes, lines).is_err() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sends each line of a message
+fn send_message(bytes: &[u8], lines: &Lines) -> Result<(), SendError<Received>> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .try_for_each(|line| lines.send(line.to_string()))
 }

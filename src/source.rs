@@ -163,3 +163,94 @@ pub fn take_complete_lines(pending: &mut Vec<u8>) -> Option<String> {
 
     Some(String::from_utf8_lossy(&complete).into_owned())
 }
+
+/// The files a `--path` value names. A value whose file name holds `*` or
+/// `?` names the files in its directory that match, in name order, leaving
+/// out hidden files unless the pattern starts with a dot. Any other value
+/// names itself.
+pub fn expand(pattern: &str) -> io::Result<Vec<PathBuf>> {
+    let path = Path::new(pattern);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+
+    if !name.contains(['*', '?']) {
+        return Ok(vec![path.to_path_buf()]);
+    }
+
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+
+    let mut matches: Vec<PathBuf> = std::fs::read_dir(directory.unwrap_or(Path::new(".")))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+
+            (name.starts_with('.') || !file_name.starts_with('.'))
+                && wildcard_match(name.as_bytes(), file_name.as_bytes())
+        })
+        .map(|entry| match directory {
+            Some(directory) => directory.join(entry.file_name()),
+            None => PathBuf::from(entry.file_name()),
+        })
+        .collect();
+
+    matches.sort();
+
+    if matches.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("No files match '{}'", pattern),
+        ));
+    }
+
+    Ok(matches)
+}
+
+/// Whether `name` matches `pattern`, where `*` matches any run of bytes and
+/// `?` any one byte
+pub fn wildcard_match(pattern: &[u8], name: &[u8]) -> bool {
+    match (pattern.first(), name.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => {
+            wildcard_match(&pattern[1..], name)
+                || (!name.is_empty() && wildcard_match(pattern, &name[1..]))
+        }
+        (Some(b'?'), Some(_)) => wildcard_match(&pattern[1..], &name[1..]),
+        (Some(expected), Some(found)) if expected == found => {
+            wildcard_match(&pattern[1..], &name[1..])
+        }
+        _ => false,
+    }
+}
+
+/// The files in a directory, in path order, leaving out hidden files and
+/// directories, and with `recursive` the files in its subdirectories too
+pub fn files_in(directory: &Path, recursive: bool) -> io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+
+        let path = entry.path();
+
+        if path.is_dir() {
+            if recursive {
+                files.extend(files_in(&path, recursive)?);
+            }
+        } else {
+            files.push(path);
+        }
+    }
+
+    files.sort();
+
+    Ok(files)
+}

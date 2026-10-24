@@ -9,7 +9,7 @@ use std::io::{self, Write};
 
 /// Message shown when interactive output is asked for outside a terminal
 pub const NEEDS_TERMINAL: &str =
-    "curses output needs a terminal; use --output ansi, html, json, or plain when redirecting";
+    "curses output needs a terminal; use --output ansi, csv, html, json, jsonl, or plain when redirecting";
 
 /// Message shown when interactive output is asked for with no log to show
 pub const NEEDS_INPUT: &str = "curses output needs a log; give --path or pipe one in";

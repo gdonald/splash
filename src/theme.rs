@@ -216,6 +216,7 @@ impl Theme {
                 Style::bold(Color::BrightRed),
                 Style::new(Color::BrightGreen),
                 Style::new(Color::BrightYellow),
+                Style::bold(Color::Blue),
             ],
         )
     }
@@ -279,6 +280,7 @@ impl Theme {
                 Style::bold(Color::Red),
                 Style::new(Color::Green),
                 Style::new(Color::Yellow),
+                Style::bold(Color::Blue),
             ],
         )
     }
@@ -352,6 +354,7 @@ impl Theme {
                 Style::bold(red),
                 Style::new(green),
                 Style::new(yellow),
+                Style::bold(violet),
             ],
         )
     }
@@ -424,6 +427,7 @@ impl Theme {
                 Style::bold(red),
                 Style::new(green),
                 Style::new(yellow),
+                Style::bold(comment),
             ],
         )
     }

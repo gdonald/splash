@@ -93,6 +93,9 @@ splash --mode ad-hoc --path /var/log/syslog
 # Receive log lines over TCP or HTTP
 splash --mode syslog --listen :8080
 
+# Receive syslog messages from other hosts over UDP and TCP
+splash --syslog :5514
+
 # Also send the output to browsers over WebSocket
 splash --mode syslog --path /var/log/syslog --follow --output json --websocket :8081
 
@@ -114,21 +117,34 @@ Options:
   -m, --mode <MODE>                      Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf,
                                          cloud-init, cron, distcc, dmesg, docker, dovecot,
                                          elasticsearch, exim, fetchmail, ftpstats, git, haproxy,
-                                         httpd, icecast, journalctl, kubernetes, mongodb, mysql,
-                                         nginx-error, oops, php, postfix, postgresql, procmail,
-                                         proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super,
-                                         syslog, systemd-resolved, terraform, ulogd, varnish, vsftpd,
-                                         xferlog, ad-hoc, auto)
+                                         httpd, icecast, journalctl (or systemd), kubernetes (or
+                                         k8s), mongodb, mysql, nginx-error, oops, php, postfix,
+                                         postgresql, procmail, proftpd, pure-ftpd, redis, squid, ssh,
+                                         sudo, sulog, super, syslog, systemd-resolved, terraform,
+                                         ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
       --auto                             Detect the log format from the first lines of the input
-  -p, --path <PATH>                      Path to the log file, or - to read stdin
-  -f, --follow                           Keep reading the --path file as it grows, as tail -f does
+  -p, --path <PATH>...                   Paths to the log files, or - to read stdin. A file name may
+                                         hold * and ?
+  -f, --follow                           Keep reading the --path files as they grow, as tail -f does
+      --merge                            Interleave the lines of several --path files in time order,
+                                         labeled with their file
+      --label                            Start each line with where it came from: its file, or the
+                                         address that sent it
+  -r, --recursive                        Read the files in the subdirectories of a --path directory
+                                         too
       --listen <ADDRESS>                 Receive log lines over TCP or HTTP on this address, such as
                                          :8080 or 127.0.0.1:8080
+      --syslog [<ADDRESS>]               Receive syslog messages over UDP and TCP on this address
+                                         (default :514)
       --websocket <ADDRESS>              Also send each line of output to WebSocket clients on this
                                          address, such as :8081
+      --forward <URL>                    Also send each line of output to tcp://HOST:PORT,
+                                         udp://HOST:PORT, or http://HOST:PORT/PATH
       --rate-limit <LINES>               Keep at most this many input lines each second, dropping the
                                          rest
-  -o, --output <OUTPUT>                  Output format (ansi, curses, html, json, plain)
+  -o, --output <OUTPUT>                  Output format (ansi, csv, curses, html, json, jsonl, plain)
+      --fields <FIELDS>                  Fields csv and jsonl output write, as FIELD,FIELD
+                                         (repeatable)
   -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
                                          core)
       --config <CONFIG>                  Config file to read instead of ~/.splash/config.toml or
@@ -151,6 +167,7 @@ Options:
       --exclude <PATTERN>                Drop lines matching this pattern (repeatable)
       --filter <KEY=VALUE>               Keep only lines holding a field with this value, as
                                          KEY=VALUE (repeatable)
+      --anonymize                        Mask IP addresses, email addresses, and user names
       --convert-date                     Rewrite timestamps written as seconds since the epoch as
                                          dates
       --normalize-dates                  Rewrite every timestamp as RFC 3339
@@ -214,6 +231,67 @@ arrives.
 
 The curses viewer follows its input whether or not `--follow` is given.
 
+## Several files
+
+`--path` takes several files, and a file name holding `*` or `?` names the matching files in its
+directory, in name order, so a quoted pattern works where the shell would not expand it. Hidden
+files match only a pattern that starts with a dot, and a pattern matching nothing exits with an
+error:
+
+```bash
+splash --mode httpd --path /var/log/nginx/access.log /var/log/nginx/error.log
+splash --auto --follow --path '/var/log/app/*.log'
+```
+
+With more than one file, splash writes a `==> PATH <==` header before each file's lines, as `tail`
+does, and when following, before lines from a file other than the one the last lines came from:
+
+```
+==> /var/log/app/api.log <==
+level=info msg="listening on :8080"
+==> /var/log/app/worker.log <==
+level=info msg="queue drained"
+```
+
+A `--path` that names a directory names the files in it, leaving out hidden files, and with
+`--recursive` (`-r`) the files in its subdirectories too, skipping hidden directories. When
+following, splash watches the directory, and a file created in it later is followed from its first
+line, under a header of its own:
+
+```bash
+splash --auto --follow --recursive --path /var/log/app
+```
+
+A file named more than once, directly and through a pattern or a directory, is read once. Each
+file is detected on its own in auto mode, and multi-line entries are tracked per file, while
+`--stats`, `--summary`, and `--histogram` count the lines of every file together. The curses
+viewer shows one file at a time.
+
+### Merging files in time order
+
+`--merge` interleaves the lines of several files by the time each was written, in place of one file
+after another, and starts each line with the name of the file it came from, colored as `source`:
+
+```bash
+splash --mode docker --merge --path api.log worker.log
+```
+
+```
+api.log 2023-10-03T12:00:01Z api start
+worker.log 2023-10-03T12:00:03Z job 1
+api.log 2023-10-03T12:00:05Z panic: boom
+api.log   at main.go:12
+worker.log 2023-10-03T12:00:07Z job 2
+```
+
+A line's time is its first timestamp, read to the fraction of a second it gives. A line without a
+timestamp, such as a stack trace line, stays with the line before it. Lines written at the same time
+keep the order the files were named in, and the lines before a file's first timestamp come first. A
+timestamp without a zone is read in the local zone. With `--follow`, the merged files are rendered
+in time order, and then each line a file gains is rendered as it arrives, labeled and without
+headers. In `json`, `jsonl`, and `csv` the label is the `source` field, and the `text` field holds
+the line as the log wrote it.
+
 ---
 
 ## Receiving logs over the network
@@ -253,6 +331,68 @@ combined with `--path`, and the curses viewer shows lines as they are received.
 
 ---
 
+## Aggregating logs from several hosts
+
+`--forward` and `--listen` together collect the logs of several hosts in one place. Each host runs
+splash on its own logs, filtering and anonymizing there, and forwards what it keeps:
+
+```bash
+# On each host
+splash --mode httpd --path /var/log/nginx/access.log --follow --level error --output plain \
+  --forward tcp://logs.example.com:5170
+```
+
+The collecting host listens, and `--label` starts each line with the address of the host that sent
+it, colored as `source`:
+
+```bash
+# On logs.example.com
+splash --mode httpd --listen :5170 --label
+```
+
+```
+10.0.0.21 10.0.0.5 - - [03/Oct/2023:12:00:05 +0000] "GET /missing HTTP/1.1" 404 153 "-" "curl/8.4.0"
+10.0.0.22 10.0.0.9 - - [03/Oct/2023:12:00:06 +0000] "POST /login HTTP/1.1" 500 0 "-" "curl/8.4.0"
+```
+
+Forward with `--output plain`, so the collecting host reads the lines as the logs wrote them rather
+than with color codes. The collecting host can itself `--forward` what it receives, or send it to
+browsers with `--websocket`. `--label` also labels `--syslog` messages with the address that sent
+them, and the lines of a `--path` file with its file name. It does not label stdin, and the curses
+viewer shows lines unlabeled.
+
+---
+
+## Receiving syslog messages
+
+`--syslog ADDRESS` has splash receive syslog messages, as a syslog daemon does, over UDP and TCP on
+the same address, until Ctrl-C or `kill` stops it. Without an address it listens on `:514`, the
+syslog port, which needs root on most systems. A higher port avoids that:
+
+```bash
+splash --syslog :5514
+```
+
+```
+Receiving syslog messages on 0.0.0.0:5514 (TCP and UDP)
+```
+
+Each UDP datagram is one message (RFC 5426). Over TCP, a message is framed by its length in digits
+and a space, or ends at a line break (RFC 6587), and one connection may use both. A message holding
+several lines is rendered line by line. rsyslog forwards to splash with:
+
+```
+*.* @127.0.0.1:5514
+*.* @@127.0.0.1:5514
+```
+
+where `@` sends over UDP and `@@` over TCP. Messages are rendered in syslog mode, which reads
+RFC 3164 and RFC 5424 messages and their `<PRI>` priorities, unless `--mode` or `--auto` names
+another. `--syslog` cannot be combined with `--path` or `--listen`, and the curses viewer shows
+messages as they are received.
+
+---
+
 ## Sending output over WebSocket
 
 `--websocket ADDRESS` sends each line splash writes to every WebSocket client connected to
@@ -277,6 +417,30 @@ reading and a send to it waits more than a second, the client is dropped, so a s
 does not hold up the output. A request that
 is not a WebSocket handshake is answered with `426 Upgrade Required`. The curses viewer writes no
 output to send, so `--websocket` cannot be combined with `--output curses`.
+
+---
+
+## Forwarding
+
+`--forward URL` sends everything splash writes to another system as well as to stdout:
+
+```bash
+# Filtered, anonymized JSON Lines to a log collector listening on TCP
+splash --mode httpd --path access.log --follow --level error --anonymize --output jsonl \
+  --forward tcp://logs.example.com:5170
+```
+
+| URL | Sends |
+| --- | --- |
+| `tcp://HOST:PORT` | The output over one connection, opened again after it fails |
+| `udp://HOST:PORT` | Each line of output as one datagram |
+| `http://HOST:PORT/PATH` | Each chunk of output as the body of a POST request, which must be answered with a 2xx status |
+
+A thread of its own does the sending, so a slow destination does not hold up the output, and splash
+waits for it to send what is queued before exiting. When a send fails, splash reports it on stderr
+once and drops that output, and reports again only after a later send has succeeded. HTTPS is not
+supported. The curses viewer writes no output to forward, so `--forward` cannot be combined with
+`--output curses`.
 
 ---
 
@@ -367,6 +531,31 @@ match=COLOR` and `--color capture=COLOR` change (see [Color overrides](#color-ov
 `--filter KEY=VALUE` keeps lines holding a field of that kind with exactly that value. The key is a
 color key, such as `status`, `host`, `userid`, or `method`. `ip` matches both an IP address and an
 access log's client address. Repeated `--filter` options must all match.
+
+---
+
+## Anonymizing
+
+`--anonymize` masks IP addresses, email addresses, and user names before a log is shared:
+
+```bash
+splash --mode httpd --path access.log --output plain --anonymize
+```
+
+```
+ip-2badd2d5 - user-1c9d1852 [03/Oct/2023:12:00:01 +0000] "GET /index.html HTTP/1.1" 200 5120 "-" "curl/8.4.0"
+```
+
+A field a mode reads as an address, a client, an email address, or a user is replaced, and so is
+an IPv4 or email address inside any other text, such as a message. A user or client written as `-`
+is kept. Each mask is a prefix, `ip`, `email`, or `user`, and eight hex digits from a keyed hash of
+the value. The same value gets the same mask throughout a run, so requests from one client can
+still be followed, and the key is chosen at random for each run, so masks from two runs cannot be
+matched. A user name inside free text, which no mode reads as a user, is not found.
+
+Masking happens as each line is read, so filters, `--stats`, `--summary`, and every output format
+see only the masks: `--filter ip=10.0.0.5` matches nothing, and the statistics count masked
+addresses.
 
 ---
 
@@ -631,7 +820,7 @@ HTML class names: `plain`, `punctuation`, `ip`, `number`, `datetime`, `tz_offset
 `module`, `pid`, `message`, `cache_hit`, `cache_miss`, `cache_result`, `hierarchy`,
 `content_type`, `transaction`, `tag`, `header`, `host`, `frontend`, `backend`, `server`,
 `timers`, `termination`, `counters`, `email`, `queue_id`, `path`, `success`, `warning`,
-`failure`, `match`, `capture`, `keyword`, `unknown_user`, `service`, and `location`.
+`failure`, `match`, `capture`, `keyword`, `unknown_user`, `service`, `location`, and `source`.
 
 A color is one of the sixteen ANSI color names (`red`, `bright cyan`, `gray`), a hex value
 (`#ff5555`), or either of those followed by `bold`.
@@ -1120,11 +1309,13 @@ colored as `transaction`. A unit name such as `nginx.service` or `multi-user.tar
 `module`, and a `key=value` field such as `code=exited` has its key colored as `header`.
 `Started`, `Finished`, `Reached target`, and `Listening on` are successes, `Stopping`, `Stopped`,
 and `Main process exited` are warnings, and `Failed to start`, `Failed`, `failed`, and `error` are
-failures.
+failures. `systemd` is another name for the mode, and `journalctl -f` prints the same lines as
+they are written, so splash colors each one as it arrives.
 
 **Example:**
 ```bash
 journalctl -b | splash --mode journalctl
+journalctl -f | splash --mode systemd
 ```
 
 ```
@@ -1534,9 +1725,15 @@ logfmt lines dockerd and containerd write, from a file or from syslog and the jo
 task id as `transaction`, and `module=` as `module`. Reads `docker logs --timestamps` output,
 coloring the time and any address in the line.
 
+`docker logs` prints the lines the program in the container wrote, in whatever format that program
+uses. In docker mode, a line in none of Docker's formats is such a line, and it is colored with the
+mode that reads it on its own, as an nginx access line is colored in httpd mode, or kept as text
+when no mode reads it. The line after a `--timestamps` time is colored the same way.
+
 **Example:**
 ```bash
 splash --mode docker --path /var/lib/docker/containers/4f2a1c0123ab/4f2a1c0123ab-json.log
+docker logs -f --timestamps web | splash --mode docker
 ```
 
 ```
@@ -1553,6 +1750,16 @@ A structured message colors its quoted message and its `key=value` pairs: a pod,
 namespace as `module`, a UID as `transaction`, and an error as `failure`. Reads the CRI lines the
 kubelet writes to `/var/log/containers`, `2023-10-03T12:00:01.123456789Z stdout F message`,
 coloring the stream and the `F` or `P` tag, and a container line that is itself a klog line.
+
+`kubectl logs` prints the container's lines as they are, after an RFC 3339 time with
+`--timestamps` and after a `[pod/NAME/CONTAINER]` tag, colored as `module`, with `--prefix`. In
+kubernetes mode, a line in none of the formats above is such a line, and the container's line, in a
+CRI line or from `kubectl logs`, is colored with the mode that reads it on its own, or kept as text.
+`k8s` is another name for the mode:
+
+```bash
+kubectl logs -f --prefix --timestamps deploy/web | splash --mode k8s
+```
 
 **Example:**
 ```bash
@@ -1778,6 +1985,51 @@ cat access.log | splash --mode clf --output json
 {"text":"127.0.0.1 - frank ...","tokens":[{"kind":"client","text":"127.0.0.1"}]}
 ```
 
+### jsonl
+
+JSON Lines for analysis: one flat object per line, holding the line text and each field the line
+holds, keyed by its kind, the same names `--color` and `--filter` take. A kind the line holds more
+than once, such as a container time and an access log time, is an array of its values in order.
+Plain text, punctuation, the keys of key-value pairs, and tokens of whitespace alone are left out.
+`--fields` writes only the fields it names, in the order named, leaving out a field a line lacks.
+
+A line written as structured data keeps that structure in a `record` member. A line that is a JSON
+object, as Caddy, MongoDB, and Elasticsearch write, is copied into `record` as it is, with its
+nesting and value types. The `key=value` pairs of a line, as dockerd, Kubernetes, and Terraform
+write, become an object of strings. A pair counts only at the start of the line or after
+whitespace, so a query string such as `/search?q=1` holds none. `--fields record` writes the record
+alone, and in `csv` the `record` column holds the record's JSON.
+
+```bash
+splash --mode caddy --path access.log --output jsonl --fields record | jq '.record.request.uri'
+```
+
+```bash
+splash --mode httpd --path access.log --output jsonl | jq -r 'select(.status == "404") | .request'
+```
+
+```json
+{"text":"10.0.0.5 - alice [03/Oct/2023:12:00:01 +0000] \"GET /index.html HTTP/1.1\" 200 5120 \"-\" \"curl/8.4.0\"","client":"10.0.0.5","user_identifier":"-","userid":"alice","timestamp":"[03/Oct/2023:12:00:01 +0000]","method":"GET","request":"/index.html","protocol":"HTTP/1.1","status":"200","size":"5120","referer":"-","user_agent":"curl/8.4.0"}
+```
+
+### csv
+
+CSV with a header row, one row per line, for spreadsheets and databases. `--fields` names the
+columns, as `text` for the line text or a field kind as in `jsonl`, and can be repeated. Without
+`--fields` the one column is `text`. A field a line holds more than once has its values joined by
+spaces, and a field it lacks is left empty. A cell holding a comma, a quote, or a line break is
+quoted (RFC 4180). An unknown field name exits with an error.
+
+```bash
+splash --mode httpd --path access.log --output csv --fields client,status,request
+```
+
+```
+client,status,request
+10.0.0.5,200,/index.html
+10.0.0.9,404,/index.html
+```
+
 ### plain
 
 The parsed line with no styling, for scripting.
@@ -1884,10 +2136,17 @@ on yours before drawing conclusions from them.
 
 **Input Sources**
 - File input, followed as it grows with `--follow`
+- Several files at once, named one by one, by a `*` and `?` pattern, or by a directory
+- Directory watching, with `--recursive` for subdirectories
+- Several files merged in time order with `--merge`
+- Lines labeled with the file or host they came from with `--label`
 - Memory-mapped reads for files of 64 KiB or more
 - Stdin streaming
 - Lines received over TCP and HTTP with `--listen`
+- Syslog messages received over UDP and TCP with `--syslog`
 - Rate limiting of input lines with `--rate-limit`
+- Masking addresses and user names with `--anonymize`
+- Forwarding output over TCP, UDP, or HTTP with `--forward`
 
 **Performance**
 - Parsing that borrows the input rather than copying it
@@ -1907,6 +2166,8 @@ on yours before drawing conclusions from them.
 - Curses viewer with vim-style keys, search, filters, split panes, and live updates
 - HTML with a customizable stylesheet
 - JSON with named token kinds
+- JSON Lines keyed by field, for analysis
+- CSV with selected fields
 - Plain text
 - ANSI, HTML, JSON, or plain output sent to browsers over WebSocket with `--websocket`
 

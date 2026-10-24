@@ -4,11 +4,13 @@
 //! file sets the default mode and output format, overrides individual token
 //! colors, and holds a table of settings per plugin. Command line options win
 //! over the file, and saved color profiles live in `~/.splash/profiles/`.
+use crate::anonymize::Anonymizer;
 use crate::dates::{DateOptions, DateRewrite, UnknownZone};
 use crate::filter::{Filter, FilterError, FilterOptions};
 use crate::keywords::{KeywordError, Keywords};
 use crate::lookups::{LookupError, Lookups};
-use crate::output::{OutputMode, UnknownOutputMode};
+use crate::output::{self, OutputMode, UnknownOutputMode};
+use crate::registry;
 use crate::stats::{StatsError, StatsOptions, StatsSettings};
 use crate::theme::{Theme, ThemeError};
 use crate::toml::{self, TomlError};
@@ -41,6 +43,7 @@ pub enum ConfigError {
     Lookup(LookupError),
     Stats(StatsError),
     StatsInViewer,
+    UnknownField(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -77,6 +80,11 @@ impl fmt::Display for ConfigError {
             ConfigError::StatsInViewer => write!(
                 f,
                 "The curses viewer cannot show --stats, --summary, or --histogram"
+            ),
+            ConfigError::UnknownField(name) => write!(
+                f,
+                "Unknown field '{}' (expected text or a color key, such as status)",
+                name
             ),
         }
     }
@@ -369,6 +377,9 @@ pub struct Options {
     pub no_wordcolor: bool,
     pub lookups: Option<bool>,
     pub stats: StatsOptions,
+    /// The fields csv and jsonl output write, as FIELD,FIELD values
+    pub fields: Vec<String>,
+    pub anonymize: bool,
 }
 
 /// The parsing mode, output format, and theme splash will run with
@@ -383,6 +394,13 @@ pub struct Settings {
     pub keywords: Keywords,
     pub lookups: Lookups,
     pub stats: StatsSettings,
+    /// The fields csv and jsonl output write, all of them when empty
+    pub fields: Vec<String>,
+    /// Masks addresses and user names, when --anonymize is given
+    pub anonymizer: Option<Anonymizer>,
+    /// The name each line is labeled with, when lines of several files are
+    /// merged
+    pub source: Option<String>,
 }
 
 /// Mode used when neither the command line nor the config file names one
@@ -421,6 +439,7 @@ impl Settings {
             .clone()
             .or_else(|| config.mode.clone())
             .unwrap_or_else(|| DEFAULT_MODE.to_string());
+        let mode = registry::canonical_mode(&mode).to_string();
 
         let output = options
             .output
@@ -449,8 +468,25 @@ impl Settings {
             keywords: resolve_keywords(options.no_wordcolor, config)?,
             lookups: Lookups::build(options.lookups, &config.lookups)?,
             stats,
+            fields: resolve_fields(&options.fields)?,
+            anonymizer: options.anonymize.then(Anonymizer::new),
+            source: None,
         })
     }
+}
+
+/// The fields named by `--fields` values, each a comma-separated list
+fn resolve_fields(values: &[String]) -> Result<Vec<String>, ConfigError> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| match output::is_field_name(name) {
+            true => Ok(name.to_string()),
+            false => Err(ConfigError::UnknownField(name.to_string())),
+        })
+        .collect()
 }
 
 /// The keywords to style: the built-in ones and the config file's, unless

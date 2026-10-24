@@ -5,10 +5,12 @@
 //! `docker logs --timestamps` prints the same line behind its time. dockerd
 //! and containerd log their own messages as logfmt pairs, as in
 //! `time="2023-10-03T12:00:01.123456789Z" level=info msg="Starting up"`,
-//! to a file or through syslog and the journal.
+//! to a file or through syslog and the journal. `docker logs` without
+//! `--timestamps` prints the container's lines as they are.
+use crate::container;
 use crate::json;
 use crate::logfmt;
-use crate::output::{ParsedLine, Token, TokenKind};
+use crate::output::{ParsedLine, TokenKind};
 use crate::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
 use crate::syslog;
 use regex::Regex;
@@ -22,12 +24,6 @@ const PROGRAMS: [&str; 3] = ["dockerd", "containerd", "docker"];
 
 /// The time and level that open a daemon's logfmt line
 static DAEMON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^time="[^"]*" level="#).unwrap());
-
-/// A line from `docker logs --timestamps`
-static TIMESTAMPED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[-+]\d{2}:\d{2}))( )(.*)$")
-        .unwrap()
-});
 
 /// The Docker plugin
 pub struct DockerPlugin {
@@ -63,6 +59,10 @@ impl Plugin for DockerPlugin {
             Some(parsed) => ParseResult::Parsed(parsed),
             None => ParseResult::NoMatch,
         }
+    }
+
+    fn parse_display_line<'a>(&self, line: &'a str) -> ParseResult<'a> {
+        ParseResult::Parsed(parse_display_line(line))
     }
 }
 
@@ -117,14 +117,24 @@ pub fn parse_daemon_line(line: &str) -> Option<ParsedLine<'_>> {
 
 /// Parses a line from `docker logs --timestamps`.
 pub fn parse_timestamped_line(line: &str) -> Option<ParsedLine<'_>> {
-    let caps = TIMESTAMPED.captures(line)?;
+    let mut tokens = Vec::new();
 
-    let mut tokens = vec![
-        Token::new(caps.get(1).unwrap().as_str(), TokenKind::Timestamp),
-        Token::new(caps.get(2).unwrap().as_str(), TokenKind::Plain),
-    ];
-
-    syslog::push_text(&mut tokens, caps.get(3).unwrap().as_str());
+    container::push_timestamped(&mut tokens, line, syslog::push_text)?;
 
     Some(ParsedLine::new(tokens))
+}
+
+/// Parses a line for rendering in docker mode: a line in none of Docker's
+/// formats is a line a container printed, and a container's line, alone or
+/// after its `--timestamps` time, is colored in its own format.
+pub fn parse_display_line(line: &str) -> ParsedLine<'_> {
+    let mut tokens = Vec::new();
+
+    if container::push_timestamped(&mut tokens, line, container::push_output).is_some() {
+        return ParsedLine::new(tokens);
+    }
+
+    json::parse_object(line, json_value_kind)
+        .or_else(|| parse_daemon_line(line))
+        .unwrap_or_else(|| container::parse_output(line))
 }

@@ -484,6 +484,71 @@ fn settings_take_the_mode_and_output_from_the_config_file() {
 }
 
 #[test]
+fn a_mode_alias_resolves_to_the_mode_it_names() {
+    let options = Options {
+        mode: Some("k8s".to_string()),
+        ..Options::default()
+    };
+
+    assert_eq!(
+        settings(options, &Config::default()).unwrap().mode,
+        "kubernetes"
+    );
+}
+
+#[test]
+fn fields_are_read_from_comma_separated_lists() {
+    let options = Options {
+        fields: vec!["client, status".to_string(), "request,".to_string()],
+        ..Options::default()
+    };
+
+    assert_eq!(
+        settings(options, &Config::default()).unwrap().fields,
+        ["client", "status", "request"]
+    );
+}
+
+#[test]
+fn an_unknown_field_stops_the_run() {
+    let options = Options {
+        fields: vec!["client,colour".to_string()],
+        ..Options::default()
+    };
+
+    let error = settings(options, &Config::default()).unwrap_err();
+
+    assert_eq!(error, ConfigError::UnknownField("colour".to_string()));
+    assert_eq!(
+        error.to_string(),
+        "Unknown field 'colour' (expected text or a color key, such as status)"
+    );
+}
+
+#[test]
+fn anonymizing_is_off_unless_asked_for() {
+    assert_eq!(
+        settings(Options::default(), &Config::default())
+            .unwrap()
+            .anonymizer,
+        None
+    );
+}
+
+#[test]
+fn anonymizing_can_be_asked_for() {
+    let options = Options {
+        anonymize: true,
+        ..Options::default()
+    };
+
+    assert!(settings(options, &Config::default())
+        .unwrap()
+        .anonymizer
+        .is_some());
+}
+
+#[test]
 fn command_line_options_win_over_the_config_file() {
     let options = Options {
         mode: Some("ad-hoc".to_string()),
@@ -590,7 +655,7 @@ fn an_unknown_output_format_stops_the_run() {
     );
     assert_eq!(
         error.to_string(),
-        "Unknown output mode 'braille' (expected ansi, curses, html, json, or plain)"
+        "Unknown output mode 'braille' (expected ansi, csv, curses, html, json, jsonl, or plain)"
     );
 }
 

@@ -515,6 +515,94 @@ fn test_json_output_mode_names_clf_fields() {
 }
 
 #[test]
+fn test_jsonl_output_mode_writes_one_object_of_fields_per_line() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "httpd", "--output", "jsonl"],
+        &example_contents("stats_access.log"),
+    )
+    .unwrap();
+
+    assert_eq!(output.lines().count(), 6);
+    assert_eq!(
+        output.lines().next().unwrap(),
+        r#"{"text":"10.0.0.5 - alice [03/Oct/2023:12:00:01 +0000] \"GET /index.html HTTP/1.1\" 200 5120 \"-\" \"curl/8.4.0\"","client":"10.0.0.5","user_identifier":"-","userid":"alice","timestamp":"[03/Oct/2023:12:00:01 +0000]","method":"GET","request":"/index.html","protocol":"HTTP/1.1","status":"200","size":"5120","referer":"-","user_agent":"curl/8.4.0"}"#
+    );
+}
+
+#[test]
+fn test_csv_output_mode_writes_the_named_fields_under_a_header_row() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "csv",
+            "--fields",
+            "client,status",
+            "--fields",
+            "request",
+        ],
+        &example_contents("stats_access.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        "client,status,request\n10.0.0.5,200,/index.html\n10.0.0.5,200,/about.html\n10.0.0.7,302,/login\n10.0.0.9,404,/index.html\n10.0.0.5,500,/index.html\n10.0.0.7,503,/api/queue/91\n"
+    );
+}
+
+#[test]
+fn test_jsonl_output_mode_writes_the_named_fields() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "jsonl",
+            "--fields",
+            "status,request",
+        ],
+        &example_contents("stats_access.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output.lines().next().unwrap(),
+        r#"{"status":"200","request":"/index.html"}"#
+    );
+}
+
+#[test]
+fn test_jsonl_output_keeps_the_structure_of_json_log_lines() {
+    let input = example_contents("caddy_access.log");
+
+    let output = run_splash_with_stdin_args(
+        &["--mode", "caddy", "--output", "jsonl", "--fields", "record"],
+        &input,
+    )
+    .unwrap();
+
+    let expected: String = input
+        .lines()
+        .map(|line| format!("{{\"record\":{}}}\n", line.trim()))
+        .collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_an_unknown_field_is_reported() {
+    let output = run_splash(&["--output", "csv", "--fields", "colour"]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: Unknown field 'colour' (expected text or a color key, such as status)\n"
+    );
+}
+
+#[test]
 fn test_html_output_mode_wraps_the_document() {
     let result = run_splash_with_stdin_args(
         &["--mode", "ad-hoc", "--output", "html"],
@@ -5124,15 +5212,12 @@ fn test_docker_mode_reads_every_line_of_timestamped_output() {
 }
 
 #[test]
-fn test_docker_mode_drops_a_line_that_is_not_a_docker_line() {
+fn test_docker_mode_keeps_a_line_a_container_printed() {
     let example = example_path("docker_mixed.log");
     let output = run_splash_with_file("docker", example.to_str().unwrap()).unwrap();
 
-    assert_eq!(output.lines().count(), 2);
-    assert!(
-        !output.contains("maintenance window"),
-        "a line in none of the formats should be dropped"
-    );
+    assert_eq!(output.lines().count(), 4);
+    assert!(output.contains("the maintenance window moves to 02:00"));
 }
 
 #[test]
@@ -5238,15 +5323,12 @@ fn test_kubernetes_mode_reads_every_line_of_a_cri_log() {
 }
 
 #[test]
-fn test_kubernetes_mode_drops_a_line_that_is_not_a_kubernetes_line() {
+fn test_kubernetes_mode_keeps_a_line_a_container_printed() {
     let example = example_path("kubernetes_mixed.log");
     let output = run_splash_with_file("kubernetes", example.to_str().unwrap()).unwrap();
 
-    assert_eq!(output.lines().count(), 2);
-    assert!(
-        !output.contains("maintenance window"),
-        "a line in none of the formats should be dropped"
-    );
+    assert_eq!(output.lines().count(), 4);
+    assert!(output.contains("the maintenance window moves to 02:00"));
 }
 
 #[test]
@@ -6598,11 +6680,17 @@ struct Listening {
 #[cfg(unix)]
 impl Listening {
     fn start(args: &[&str]) -> Listening {
+        Listening::receive(args, "--listen", "Listening on ")
+    }
+
+    /// Starts splash with `source` naming port 0, reading the address it
+    /// chose from the stderr line that opens with `announcement`
+    fn receive(args: &[&str], source: &str, announcement_start: &str) -> Listening {
         use std::io::BufRead;
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
             .args(args)
-            .args(["--listen", "127.0.0.1:0"])
+            .args([source, "127.0.0.1:0"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -6615,7 +6703,10 @@ impl Listening {
 
         let address = announcement
             .trim_end()
-            .strip_prefix("Listening on ")
+            .strip_prefix(announcement_start)
+            .unwrap()
+            .split(' ')
+            .next()
             .unwrap()
             .to_string();
 
@@ -6655,6 +6746,14 @@ impl Listening {
         let mut connection = std::net::TcpStream::connect(&self.address).unwrap();
         connection.write_all(text.as_bytes()).unwrap();
         drop(connection);
+        self.collect();
+    }
+
+    fn send_datagram(&mut self, text: &str) {
+        std::net::UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .send_to(text.as_bytes(), &self.address)
+            .unwrap();
         self.collect();
     }
 
@@ -6846,6 +6945,636 @@ fn test_a_websocket_address_that_cannot_be_bound_is_reported() {
         .starts_with("Error: Cannot listen on not an address: "));
 }
 
+// ==================== Syslog Receiver Tests ====================
+
+const SYSLOG_UDP: &str =
+    "<38>Oct  3 12:00:01 web01 sshd[4101]: Accepted publickey for alice from 10.0.0.5 port 52144 ssh2";
+
+const SYSLOG_TCP: &str = "<165>1 2023-10-03T12:00:02.003Z web01 app 4102 ID47 - backup finished";
+
+#[cfg(unix)]
+#[test]
+fn test_syslog_messages_over_udp_and_tcp_are_rendered_in_syslog_mode() {
+    let mut receiving = Listening::receive(
+        &["--output", "json"],
+        "--syslog",
+        "Receiving syslog messages on ",
+    );
+
+    receiving.send_datagram(SYSLOG_UDP);
+    receiving.send_raw(&format!("{} {}", SYSLOG_TCP.len(), SYSLOG_TCP));
+    let (success, output) = receiving.interrupt();
+
+    let expected = run_splash_with_stdin_args(
+        &["--mode", "syslog", "--output", "json"],
+        &format!("{}\n{}\n", SYSLOG_UDP, SYSLOG_TCP),
+    )
+    .unwrap();
+
+    assert!(success);
+    assert_eq!(output, expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_mode_given_with_syslog_is_used_in_place_of_syslog_mode() {
+    let mut receiving = Listening::receive(
+        &["--mode", "ad-hoc", "--output", "json"],
+        "--syslog",
+        "Receiving syslog messages on ",
+    );
+
+    receiving.send_datagram(SYSLOG_UDP);
+    let (_, output) = receiving.interrupt();
+
+    let expected =
+        run_splash_with_stdin_args(&["--mode", "ad-hoc", "--output", "json"], SYSLOG_UDP).unwrap();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_syslog_cannot_be_combined_with_listen() {
+    let output = run_splash(&["--syslog", ":0", "--listen", ":0"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+}
+
+#[test]
+fn test_a_syslog_address_that_cannot_be_bound_is_reported() {
+    let output = run_splash(&["--syslog", "not an address"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("Error: Cannot listen on not an address: "));
+}
+
+// ==================== Anonymization Tests ====================
+
+#[test]
+fn test_anonymized_output_holds_no_address_or_user_name() {
+    let output = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "httpd",
+            "--output",
+            "csv",
+            "--fields",
+            "client,userid,text",
+            "--anonymize",
+        ],
+        &example_contents("stats_access.log"),
+    )
+    .unwrap();
+
+    let rows: Vec<Vec<&str>> = output
+        .lines()
+        .skip(1)
+        .map(|row| row.splitn(3, ',').collect())
+        .collect();
+
+    assert_eq!(rows.len(), 6);
+    assert!(!output.contains("10.0.0."));
+    assert!(!output.contains("alice"));
+    assert_eq!(rows[0][0], rows[1][0]);
+    assert_ne!(rows[0][0], rows[2][0]);
+    assert_eq!(rows[2][1], "-");
+    assert!(rows[0][2].starts_with(&format!("\"{} - user-", rows[0][0])));
+}
+
+#[test]
+fn test_statistics_on_anonymized_lines_hold_no_address() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "httpd", "--stats", "--anonymize"],
+        &example_contents("stats_access.log"),
+    )
+    .unwrap();
+
+    assert!(output.contains("Top addresses:\n  ip-"));
+    assert!(!output.contains("10.0.0."));
+}
+
+// ==================== Multiple File Tests ====================
+
+/// A directory holding log files with the given names and contents
+fn log_directory(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let directory = tempfile::TempDir::new().unwrap();
+
+    for (name, contents) in files {
+        std::fs::write(directory.path().join(name), contents).unwrap();
+    }
+
+    directory
+}
+
+fn header(path: &Path) -> String {
+    format!("==> {} <==\n", path.display())
+}
+
+#[test]
+fn test_several_files_are_rendered_in_turn_under_headers() {
+    let directory = log_directory(&[("a.log", "alpha\n"), ("b.log", "beta\n")]);
+    let first = directory.path().join("a.log");
+    let second = directory.path().join("b.log");
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--path",
+        first.to_str().unwrap(),
+        second.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        format!("{}alpha\n{}beta\n", header(&first), header(&second))
+    );
+}
+
+#[test]
+fn test_a_path_pattern_renders_every_matching_file() {
+    let directory = log_directory(&[
+        ("web.log", "web line\n"),
+        ("app.log", "app line\n"),
+        ("notes.txt", "not a log\n"),
+    ]);
+    let pattern = directory.path().join("*.log");
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--path",
+        pattern.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        format!(
+            "{}app line\n{}web line\n",
+            header(&directory.path().join("app.log")),
+            header(&directory.path().join("web.log"))
+        )
+    );
+}
+
+#[test]
+fn test_a_path_pattern_matching_nothing_is_reported() {
+    let directory = log_directory(&[]);
+    let pattern = directory.path().join("*.log");
+
+    let output = run_splash(&["--path", pattern.to_str().unwrap()]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!("Error: No files match '{}'\n", pattern.display())
+    );
+}
+
+#[test]
+fn test_each_file_is_detected_in_its_own_format() {
+    let access = example_path("stats_access.log");
+    let journal = example_path("journalctl_follow.log");
+
+    let output = run_splash_file_args(&[
+        "--auto",
+        "--output",
+        "jsonl",
+        "--path",
+        access.to_str().unwrap(),
+        journal.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    let lines: Vec<&str> = output.lines().collect();
+
+    assert_eq!(lines.len(), 11);
+    assert!(lines[1].contains(r#""client":"10.0.0.5""#));
+    assert!(lines[8].contains(r#""host":"web01""#));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_followed_files_show_a_header_when_the_output_switches_files() {
+    let directory = log_directory(&[("a.log", "alpha\n"), ("b.log", "beta\n")]);
+    let first = directory.path().join("a.log");
+    let second = directory.path().join("b.log");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args([
+            "--mode", "ad-hoc", "--output", "plain", "--follow", "--path",
+        ])
+        .args([&first, &second])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let collect = |output: &mut Vec<u8>| {
+        if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            output.extend(chunk);
+
+            while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+                output.extend(chunk);
+            }
+        }
+    };
+
+    let mut output = Vec::new();
+    collect(&mut output);
+    append_to(&second, "second beta\n");
+    collect(&mut output);
+    append_to(&first, "second alpha\n");
+    collect(&mut output);
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    assert!(child.wait().unwrap().success());
+
+    assert_eq!(
+        String::from_utf8_lossy(&output),
+        format!(
+            "{}alpha\n{}beta\nsecond beta\n{}second alpha\n",
+            header(&first),
+            header(&second),
+            header(&first)
+        )
+    );
+}
+
+#[test]
+fn test_a_directory_renders_each_of_its_files() {
+    let directory = log_directory(&[("api.log", "api line\n"), ("web.log", "web line\n")]);
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--path",
+        directory.path().to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        format!(
+            "{}api line\n{}web line\n",
+            header(&directory.path().join("api.log")),
+            header(&directory.path().join("web.log"))
+        )
+    );
+}
+
+#[test]
+fn test_a_directory_read_recursively_renders_the_files_of_its_subdirectories() {
+    let directory = log_directory(&[("web.log", "web line\n")]);
+    std::fs::create_dir(directory.path().join("api")).unwrap();
+    std::fs::write(directory.path().join("api/api.log"), "api line\n").unwrap();
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--recursive",
+        "--path",
+        directory.path().to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        format!(
+            "{}api line\n{}web line\n",
+            header(&directory.path().join("api/api.log")),
+            header(&directory.path().join("web.log"))
+        )
+    );
+}
+
+#[test]
+fn test_a_file_named_twice_is_rendered_once() {
+    let directory = log_directory(&[("web.log", "web line\n")]);
+    let file = directory.path().join("web.log");
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--path",
+        file.to_str().unwrap(),
+        file.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output, "web line\n");
+}
+
+#[test]
+fn test_recursive_needs_a_path() {
+    let output = run_splash(&["--recursive"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--path <PATH>"));
+}
+
+/// Follows `path` with `args`, makes `change` once the first output has
+/// arrived, and returns everything written once the output for the change
+/// has arrived and splash was interrupted
+#[cfg(unix)]
+fn follow_path(args: &[&str], path: &Path, change: &dyn Fn()) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(args)
+        .args(["--follow", "--path"])
+        .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let collect = |output: &mut Vec<u8>| {
+        if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            output.extend(chunk);
+
+            while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+                output.extend(chunk);
+            }
+        }
+    };
+
+    let mut output = Vec::new();
+    collect(&mut output);
+    change();
+    collect(&mut output);
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    assert!(child.wait().unwrap().success());
+
+    String::from_utf8_lossy(&output).to_string()
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_file_created_in_a_followed_directory_is_followed() {
+    let directory = log_directory(&[("web.log", "web line\n")]);
+    let created = directory.path().join("api.log");
+
+    let output = follow_path(
+        &["--mode", "ad-hoc", "--output", "plain"],
+        directory.path(),
+        &|| std::fs::write(&created, "api line\n").unwrap(),
+    );
+
+    assert_eq!(
+        output,
+        format!(
+            "{}web line\n{}api line\n",
+            header(&directory.path().join("web.log")),
+            header(&created)
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_file_created_in_a_subdirectory_of_a_recursively_followed_directory_is_followed() {
+    let directory = log_directory(&[("web.log", "web line\n")]);
+    std::fs::create_dir(directory.path().join("api")).unwrap();
+    let created = directory.path().join("api/api.log");
+
+    let output = follow_path(
+        &["--mode", "ad-hoc", "--output", "plain", "--recursive"],
+        directory.path(),
+        &|| std::fs::write(&created, "api line\n").unwrap(),
+    );
+
+    assert_eq!(
+        output,
+        format!(
+            "{}web line\n{}api line\n",
+            header(&directory.path().join("web.log")),
+            header(&created)
+        )
+    );
+}
+
+// ==================== Merge Tests ====================
+
+const MERGE_API: &str =
+    "2023-10-03T12:00:01Z api start\n2023-10-03T12:00:05Z panic: boom\n  at main.go:12\n";
+
+const MERGE_WORKER: &str = "2023-10-03T12:00:03Z job 1\n2023-10-03T12:00:07Z job 2\n";
+
+const MERGED: &str = "api.log 2023-10-03T12:00:01Z api start\nworker.log 2023-10-03T12:00:03Z job 1\napi.log 2023-10-03T12:00:05Z panic: boom\napi.log   at main.go:12\nworker.log 2023-10-03T12:00:07Z job 2\n";
+
+#[test]
+fn test_merged_files_are_interleaved_in_time_order_with_labels() {
+    let directory = log_directory(&[("api.log", MERGE_API), ("worker.log", MERGE_WORKER)]);
+    let pattern = directory.path().join("*.log");
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "docker",
+        "--output",
+        "plain",
+        "--merge",
+        "--path",
+        pattern.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output, MERGED);
+}
+
+#[test]
+fn test_statistics_on_merged_files_are_written_once() {
+    let directory = log_directory(&[("api.log", MERGE_API), ("worker.log", MERGE_WORKER)]);
+    let pattern = directory.path().join("*.log");
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "docker",
+        "--stats",
+        "--stats-format",
+        "csv",
+        "--merge",
+        "--path",
+        pattern.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output.matches("lines,,").collect::<Vec<_>>(), ["lines,,"]);
+    assert!(output.contains("lines,,5\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_lines_merged_files_gain_are_labeled_without_headers() {
+    let directory = log_directory(&[("api.log", MERGE_API), ("worker.log", MERGE_WORKER)]);
+    let worker = directory.path().join("worker.log");
+    let api = directory.path().join("api.log");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args([
+            "--mode", "docker", "--output", "plain", "--merge", "--follow", "--path",
+        ])
+        .args([&api, &worker])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let collect = |output: &mut Vec<u8>| {
+        if let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+            output.extend(chunk);
+
+            while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+                output.extend(chunk);
+            }
+        }
+    };
+
+    let mut output = Vec::new();
+    collect(&mut output);
+    append_to(&worker, "2023-10-03T12:00:11Z job 3\n");
+    collect(&mut output);
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    assert!(child.wait().unwrap().success());
+    assert_eq!(
+        String::from_utf8_lossy(&output),
+        format!("{}worker.log 2023-10-03T12:00:11Z job 3\n", MERGED)
+    );
+}
+
+#[test]
+fn test_merge_needs_a_path() {
+    let output = run_splash(&["--merge"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--path <PATH>"));
+}
+
+// ==================== Aggregation Tests ====================
+
+#[cfg(unix)]
+#[test]
+fn test_an_aggregator_labels_the_lines_each_host_forwards() {
+    let mut aggregator = Listening::start(&["--mode", "docker", "--output", "plain", "--label"]);
+    let directory = log_directory(&[("app.log", MERGE_WORKER)]);
+    let url = format!("tcp://{}", aggregator.address);
+
+    let edge = run_splash(&[
+        "--mode",
+        "docker",
+        "--output",
+        "plain",
+        "--forward",
+        &url,
+        "--path",
+        directory.path().join("app.log").to_str().unwrap(),
+    ])
+    .unwrap();
+    aggregator.collect();
+    let (success, output) = aggregator.interrupt();
+
+    assert!(edge.status.success());
+    assert!(success);
+    assert_eq!(
+        output,
+        "127.0.0.1 2023-10-03T12:00:03Z job 1\n127.0.0.1 2023-10-03T12:00:07Z job 2\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_syslog_messages_are_labeled_with_the_host_that_sent_them() {
+    let mut receiving = Listening::receive(
+        &["--mode", "syslog", "--output", "plain", "--label"],
+        "--syslog",
+        "Receiving syslog messages on ",
+    );
+
+    receiving.send_datagram(SYSLOG_UDP);
+    let (_, output) = receiving.interrupt();
+
+    assert_eq!(output, format!("127.0.0.1 {}\n", SYSLOG_UDP));
+}
+
+#[test]
+fn test_a_labeled_file_starts_each_line_with_its_name() {
+    let directory = log_directory(&[("app.log", "alpha\nbeta\n")]);
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "ad-hoc",
+        "--output",
+        "plain",
+        "--label",
+        "--path",
+        directory.path().join("app.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output, "app.log alpha\napp.log beta\n");
+}
+
 // ==================== Rate Limit Tests ====================
 
 #[test]
@@ -6940,6 +7669,202 @@ fn test_a_new_rate_limit_window_keeps_lines_again() {
 
     assert_eq!(output, "one\nfour\n");
     assert_eq!(errors, "Dropped 2 lines over the limit of 1 per second\n");
+}
+
+// ==================== Container and Journal Pipe Tests ====================
+
+/// The JSON token kinds of each line splash writes, leaving out plain text
+fn json_kinds(output: &str) -> Vec<Vec<String>> {
+    let kind = regex::Regex::new(r#""kind":"([a-z_]+)""#).unwrap();
+
+    output
+        .lines()
+        .map(|line| {
+            kind.captures_iter(line)
+                .map(|found| found[1].to_string())
+                .filter(|found| found != "plain")
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn test_docker_logs_output_is_shown_in_each_containers_format() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "docker", "--output", "json"],
+        &example_contents("docker_logs.log"),
+    )
+    .unwrap();
+
+    let kinds = json_kinds(&output);
+
+    assert_eq!(kinds.len(), 4);
+    assert_eq!(kinds[0][0], "client");
+    assert_eq!(kinds[1][..3], ["timestamp", "punctuation", "failure"]);
+    assert_eq!(kinds[2], ["message"]);
+    assert_eq!(kinds[3][..2], ["timestamp", "client"]);
+}
+
+#[test]
+fn test_docker_logs_output_keeps_every_line() {
+    let input = example_contents("docker_logs.log");
+
+    let output =
+        run_splash_with_stdin_args(&["--mode", "docker", "--output", "plain"], &input).unwrap();
+
+    assert_eq!(output, input);
+}
+
+#[test]
+fn test_kubectl_logs_output_is_shown_with_the_k8s_mode() {
+    let output = run_splash_with_stdin_args(
+        &["--mode", "k8s", "--output", "json"],
+        &example_contents("kubectl_logs.log"),
+    )
+    .unwrap();
+
+    let kinds = json_kinds(&output);
+
+    assert_eq!(kinds.len(), 5);
+    assert_eq!(kinds[0][..2], ["level", "timestamp"]);
+    assert_eq!(kinds[1], ["message"]);
+    assert_eq!(kinds[2][..2], ["timestamp", "client"]);
+    assert_eq!(kinds[3][..2], ["module", "client"]);
+    assert_eq!(kinds[4], ["module", "timestamp", "message"]);
+}
+
+#[test]
+fn test_the_systemd_mode_is_the_journalctl_mode() {
+    let input = example_contents("journalctl_follow.log");
+
+    let systemd =
+        run_splash_with_stdin_args(&["--mode", "systemd", "--output", "json"], &input).unwrap();
+    let journalctl =
+        run_splash_with_stdin_args(&["--mode", "journalctl", "--output", "json"], &input).unwrap();
+
+    assert_eq!(systemd, journalctl);
+    assert_eq!(json_kinds(&systemd)[1][..3], ["timestamp", "host", "tag"]);
+}
+
+/// Streams `example` into splash through a pipe that stays open, as
+/// `docker logs -f`, `kubectl logs -f`, and `journalctl -f` do, and returns
+/// what splash wrote before the pipe closed
+#[cfg(unix)]
+fn followed_pipe_output(mode: &str, example: &str) -> String {
+    let (mut child, stdin, _receiver, output) = stream_stdin_example(
+        &["--mode", mode, "--output", "plain"],
+        &example_contents(example),
+    );
+
+    drop(stdin);
+    child.wait().unwrap();
+
+    String::from_utf8_lossy(&output).to_string()
+}
+
+#[cfg(unix)]
+#[test]
+fn test_docker_logs_follow_is_shown_as_it_arrives() {
+    assert_eq!(
+        followed_pipe_output("docker", "docker_logs.log"),
+        example_contents("docker_logs.log")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_kubectl_logs_follow_is_shown_as_it_arrives() {
+    assert_eq!(
+        followed_pipe_output("k8s", "kubectl_logs.log"),
+        example_contents("kubectl_logs.log")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_journalctl_follow_is_shown_as_it_arrives() {
+    assert_eq!(
+        followed_pipe_output("systemd", "journalctl_follow.log"),
+        example_contents("journalctl_follow.log")
+    );
+}
+
+// ==================== Forwarding Tests ====================
+
+#[test]
+fn test_output_is_forwarded_before_splash_exits() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("tcp://{}", listener.local_addr().unwrap());
+    let input = example_contents("stats_access.log");
+
+    let output = run_splash_with_stdin_args(
+        &["--mode", "httpd", "--output", "plain", "--forward", &url],
+        &input,
+    )
+    .unwrap();
+
+    let mut forwarded = String::new();
+    listener
+        .accept()
+        .unwrap()
+        .0
+        .read_to_string(&mut forwarded)
+        .unwrap();
+
+    assert_eq!(output, input);
+    assert_eq!(forwarded, input);
+}
+
+#[test]
+fn test_an_invalid_forward_url_is_reported() {
+    let output = run_splash(&["--forward", "https://logs.example.com:443/"]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: Cannot forward over https (expected tcp, udp, or http)\n"
+    );
+}
+
+#[test]
+fn test_forwarding_cannot_be_combined_with_the_curses_viewer() {
+    let output = run_splash(&["--forward", "tcp://127.0.0.1:9", "--output", "curses"]).unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: --forward sends the output splash writes, and the curses viewer writes none\n"
+    );
+}
+
+#[test]
+fn test_a_forward_failure_is_reported_on_stderr() {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let url = format!("tcp://{}", address);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--mode", "ad-hoc", "--output", "plain", "--forward", &url])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"service started\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with(&format!("Cannot forward to {}: ", url)));
 }
 
 // ==================== Stdin Streaming Tests ====================
@@ -7415,6 +8340,71 @@ fn test_the_viewer_shows_lines_received_over_the_network() {
     run.type_keys("q");
 
     assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_syslog_messages_it_receives() {
+    let mut run = TerminalRun::start(&["--output", "curses", "--syslog", "127.0.0.1:0"], None);
+
+    run.wait_for(" (TCP and UDP)");
+
+    let announced = run
+        .drawn
+        .split("Receiving syslog messages on ")
+        .nth(1)
+        .unwrap();
+    let address = announced.split_whitespace().next().unwrap().to_string();
+
+    std::net::UdpSocket::bind("127.0.0.1:0")
+        .unwrap()
+        .send_to(SYSLOG_UDP.as_bytes(), address)
+        .unwrap();
+
+    run.wait_for("lines 1-1 of 1");
+    run.type_keys("q");
+
+    assert!(run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_one_file_at_a_time() {
+    let access = example_path("stats_access.log");
+    let journal = example_path("journalctl_follow.log");
+    let mut run = TerminalRun::start(
+        &[
+            "--output",
+            "curses",
+            "--path",
+            access.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ],
+        None,
+    );
+
+    run.wait_for("The curses viewer shows one file; give --path one file");
+
+    assert!(!run.finish());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_needs_a_file_in_a_directory_to_show() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let mut run = TerminalRun::start(
+        &[
+            "--output",
+            "curses",
+            "--path",
+            directory.path().to_str().unwrap(),
+        ],
+        None,
+    );
+
+    run.wait_for("The curses viewer shows one file; give --path one file");
+
+    assert!(!run.finish());
 }
 
 #[cfg(unix)]

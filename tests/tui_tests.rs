@@ -62,6 +62,9 @@ fn plain_settings() -> Settings {
         keywords: Default::default(),
         lookups: Default::default(),
         stats: Default::default(),
+        fields: Vec::new(),
+        anonymizer: None,
+        source: None,
     }
 }
 
@@ -76,7 +79,7 @@ fn rendered(viewer: &Viewer) -> String {
 fn the_terminal_requirement_names_the_other_output_modes() {
     assert_eq!(
         NEEDS_TERMINAL,
-        "curses output needs a terminal; use --output ansi, html, json, or plain when redirecting"
+        "curses output needs a terminal; use --output ansi, csv, html, json, jsonl, or plain when redirecting"
     );
 }
 

@@ -1,0 +1,3 @@
+Oct 03 12:00:01 web01 systemd[1]: Starting nginx.service - A high performance web server...
+Oct 03 12:00:02 web01 systemd[1]: Started nginx.service - A high performance web server.
+Oct 03 12:00:05 web01 sshd[4101]: Accepted publickey for alice from 10.0.0.5 port 52144 ssh2

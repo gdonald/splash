@@ -1,5 +1,5 @@
 use splash::output::{
-    escape_html, escape_json, OutputMode, ParsedLine, Token, TokenKind, UnknownOutputMode,
+    self, escape_html, escape_json, OutputMode, ParsedLine, Token, TokenKind, UnknownOutputMode,
 };
 use splash::theme::Theme;
 use std::collections::HashSet;
@@ -84,11 +84,13 @@ fn ansi_is_the_default_output_mode() {
 #[test]
 fn output_modes_parse_from_their_names() {
     assert_eq!("ansi".parse(), Ok(OutputMode::Ansi));
+    assert_eq!("csv".parse(), Ok(OutputMode::Csv));
     assert_eq!("color".parse(), Ok(OutputMode::Ansi));
     assert_eq!("curses".parse(), Ok(OutputMode::Curses));
     assert_eq!("tui".parse(), Ok(OutputMode::Curses));
     assert_eq!("html".parse(), Ok(OutputMode::Html));
     assert_eq!("json".parse(), Ok(OutputMode::Json));
+    assert_eq!("jsonl".parse(), Ok(OutputMode::Jsonl));
     assert_eq!("plain".parse(), Ok(OutputMode::Plain));
     assert_eq!("none".parse(), Ok(OutputMode::Plain));
 }
@@ -111,7 +113,7 @@ fn an_unknown_output_mode_names_the_supported_modes() {
 
     assert_eq!(
         error.to_string(),
-        "Unknown output mode 'sparkles' (expected ansi, curses, html, json, or plain)"
+        "Unknown output mode 'sparkles' (expected ansi, csv, curses, html, json, jsonl, or plain)"
     );
 }
 
@@ -127,16 +129,21 @@ fn an_unknown_output_mode_is_a_standard_error() {
 fn output_modes_display_their_names() {
     let names: Vec<String> = [
         OutputMode::Ansi,
+        OutputMode::Csv,
         OutputMode::Curses,
         OutputMode::Html,
         OutputMode::Json,
+        OutputMode::Jsonl,
         OutputMode::Plain,
     ]
     .iter()
     .map(|mode| mode.to_string())
     .collect();
 
-    assert_eq!(names, vec!["ansi", "curses", "html", "json", "plain"]);
+    assert_eq!(
+        names,
+        vec!["ansi", "csv", "curses", "html", "json", "jsonl", "plain"]
+    );
 }
 
 #[test]
@@ -298,5 +305,240 @@ fn a_slice_of_an_owned_token_keeps_its_style() {
     assert_eq!(
         token.slice(0, 10),
         Token::new("2023-10-03", TokenKind::Timestamp)
+    );
+}
+
+fn render_jsonl(tokens: Vec<Token<'static>>) -> String {
+    OutputMode::Jsonl.render(&ParsedLine::new(tokens), &Theme::default())
+}
+
+#[test]
+fn jsonl_output_keys_each_field_by_its_kind() {
+    assert_eq!(
+        render_jsonl(sample_line().tokens),
+        r#"{"text":"127.0.0.1 \"GET\"","ip":"127.0.0.1","http_verb":"GET"}"#
+    );
+}
+
+#[test]
+fn jsonl_output_gathers_a_repeated_kind_into_an_array() {
+    let output = render_jsonl(vec![
+        Token::new("2023-10-03T12:00:01Z", TokenKind::Timestamp),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("[03/Oct/2023:12:00:01 +0000]", TokenKind::Timestamp),
+    ]);
+
+    assert_eq!(
+        output,
+        r#"{"text":"2023-10-03T12:00:01Z [03/Oct/2023:12:00:01 +0000]","timestamp":["2023-10-03T12:00:01Z","[03/Oct/2023:12:00:01 +0000]"]}"#
+    );
+}
+
+#[test]
+fn jsonl_output_leaves_out_pair_keys_and_whitespace() {
+    let output = render_jsonl(vec![
+        Token::new("level", TokenKind::Header),
+        Token::new("=", TokenKind::Punctuation),
+        Token::new("info", TokenKind::Level),
+        Token::new(" ", TokenKind::Message),
+    ]);
+
+    assert_eq!(
+        output,
+        r#"{"text":"level=info ","level":"info","record":{"level":"info"}}"#
+    );
+}
+
+#[test]
+fn jsonl_output_escapes_field_values() {
+    let output = render_jsonl(vec![Token::new("say \"hi\"\t", TokenKind::Message)]);
+
+    assert_eq!(
+        output,
+        r#"{"text":"say \"hi\"\t","message":"say \"hi\"\t"}"#
+    );
+}
+
+#[test]
+fn jsonl_output_has_no_header_or_footer() {
+    assert_eq!(OutputMode::Jsonl.header(&Theme::default()), None);
+    assert_eq!(OutputMode::Jsonl.footer(), None);
+}
+
+fn access_line() -> ParsedLine<'static> {
+    ParsedLine::new(vec![
+        Token::new("10.0.0.5", TokenKind::Client),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("GET", TokenKind::Method),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("/a,b", TokenKind::Request),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("404", TokenKind::Status),
+    ])
+}
+
+fn names(fields: &[&str]) -> Vec<String> {
+    fields.iter().map(|field| field.to_string()).collect()
+}
+
+#[test]
+fn jsonl_output_writes_only_the_named_fields_in_the_order_named() {
+    let output = OutputMode::Jsonl.render_with_fields(
+        &access_line(),
+        &Theme::default(),
+        &names(&["status", "text", "userid", "client"]),
+    );
+
+    assert_eq!(
+        output,
+        r#"{"status":"404","text":"10.0.0.5 GET /a,b 404","client":"10.0.0.5"}"#
+    );
+}
+
+#[test]
+fn csv_output_writes_the_line_text_when_no_fields_are_named() {
+    assert_eq!(
+        OutputMode::Csv.render(&access_line(), &Theme::default()),
+        r#""10.0.0.5 GET /a,b 404""#
+    );
+    assert_eq!(
+        OutputMode::Csv.header(&Theme::default()),
+        Some("text\n".to_string())
+    );
+}
+
+#[test]
+fn csv_output_writes_a_column_for_each_named_field() {
+    let fields = names(&["client", "status", "request", "userid"]);
+
+    assert_eq!(
+        OutputMode::Csv.header_with_fields(&Theme::default(), &fields),
+        Some("client,status,request,userid\n".to_string())
+    );
+    assert_eq!(
+        OutputMode::Csv.render_with_fields(&access_line(), &Theme::default(), &fields),
+        r#"10.0.0.5,404,"/a,b","#
+    );
+}
+
+#[test]
+fn csv_output_joins_a_repeated_field_with_spaces() {
+    let line = ParsedLine::new(vec![
+        Token::new("listening on", TokenKind::Message),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("10.0.0.5", TokenKind::Ip),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("port 80", TokenKind::Message),
+    ]);
+
+    assert_eq!(
+        OutputMode::Csv.render_with_fields(&line, &Theme::default(), &names(&["message"])),
+        "listening on port 80"
+    );
+}
+
+#[test]
+fn csv_output_doubles_quotes_and_quotes_line_breaks() {
+    let line = ParsedLine::new(vec![Token::new("say \"hi\"\nnow", TokenKind::Message)]);
+
+    assert_eq!(
+        OutputMode::Csv.render(&line, &Theme::default()),
+        "\"say \"\"hi\"\"\nnow\""
+    );
+}
+
+#[test]
+fn field_names_are_text_and_the_token_kinds() {
+    assert!(output::is_field_name("text"));
+    assert!(output::is_field_name("status"));
+    assert!(!output::is_field_name("colour"));
+}
+
+#[test]
+fn a_json_line_keeps_its_structure_as_the_record() {
+    assert_eq!(
+        output::record(r#"  {"level":"info","user":{"id":7,"admin":false},"tags":["a"]} "#),
+        Some(r#"{"level":"info","user":{"id":7,"admin":false},"tags":["a"]}"#.to_string())
+    );
+}
+
+#[test]
+fn key_value_pairs_become_a_record_of_strings() {
+    assert_eq!(
+        output::record(r#"time="2023-10-03T12:00:01Z" level=info msg="say \"hi\"""#),
+        Some(
+            r#"{"time":"2023-10-03T12:00:01Z","level":"info","msg":"say \\\"hi\\\""}"#.to_string()
+        )
+    );
+}
+
+#[test]
+fn a_line_in_neither_form_has_no_record() {
+    assert_eq!(output::record("GET /search?q=1 HTTP/1.1"), None);
+    assert_eq!(output::record("{not json"), None);
+}
+
+#[test]
+fn jsonl_output_holds_the_record_of_a_structured_line() {
+    let line = ParsedLine::new(vec![Token::new(r#"{"level":"info"}"#, TokenKind::Message)]);
+
+    assert_eq!(
+        OutputMode::Jsonl.render(&line, &Theme::default()),
+        r#"{"text":"{\"level\":\"info\"}","message":"{\"level\":\"info\"}","record":{"level":"info"}}"#
+    );
+}
+
+#[test]
+fn the_record_is_a_field_csv_can_name() {
+    let line = ParsedLine::new(vec![Token::new("level=info", TokenKind::Message)]);
+    let fields = names(&["record", "text"]);
+
+    assert!(output::is_field_name("record"));
+    assert_eq!(
+        OutputMode::Csv.render_with_fields(&line, &Theme::default(), &fields),
+        r#""{""level"":""info""}",level=info"#
+    );
+}
+
+#[test]
+fn a_line_without_a_record_has_an_empty_record_cell() {
+    assert_eq!(
+        OutputMode::Csv.render_with_fields(&access_line(), &Theme::default(), &names(&["record"])),
+        ""
+    );
+}
+
+fn labeled_line() -> ParsedLine<'static> {
+    ParsedLine::new(vec![
+        Token::new("api.log", TokenKind::Source),
+        Token::new(" ", TokenKind::Plain),
+        Token::new("ready", TokenKind::Message),
+    ])
+}
+
+#[test]
+fn a_merged_lines_label_is_not_part_of_its_text() {
+    assert_eq!(
+        OutputMode::Jsonl.render(&labeled_line(), &Theme::default()),
+        r#"{"text":"ready","source":"api.log","message":"ready"}"#
+    );
+    assert!(OutputMode::Json
+        .render(&labeled_line(), &Theme::default())
+        .starts_with(r#"{"text":"ready","tokens":[{"kind":"source","text":"api.log"}"#));
+    assert_eq!(
+        OutputMode::Csv.render_with_fields(
+            &labeled_line(),
+            &Theme::default(),
+            &names(&["source", "text"])
+        ),
+        "api.log,ready"
+    );
+}
+
+#[test]
+fn plain_output_writes_a_merged_lines_label() {
+    assert_eq!(
+        OutputMode::Plain.render(&labeled_line(), &Theme::default()),
+        "api.log ready"
     );
 }

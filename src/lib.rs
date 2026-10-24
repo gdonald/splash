@@ -1,3 +1,4 @@
+pub mod anonymize;
 pub mod apache_error;
 pub mod apm;
 pub mod auth;
@@ -7,6 +8,7 @@ pub mod ci;
 pub mod cloud_init;
 pub mod color;
 pub mod config;
+pub mod container;
 pub mod cron;
 pub mod dates;
 pub mod detect;
@@ -19,6 +21,7 @@ pub mod elasticsearch;
 pub mod exim;
 pub mod fetchmail;
 pub mod filter;
+pub mod forward;
 pub mod ftp;
 pub mod ftpstats;
 pub mod git;
@@ -33,6 +36,7 @@ pub mod listen;
 pub mod logfmt;
 pub mod lookups;
 pub mod mail;
+pub mod merge;
 pub mod mongodb;
 pub mod mysql;
 pub mod nginx_error;
@@ -72,13 +76,14 @@ pub mod websocket;
 pub mod xferlog;
 pub mod zone;
 
+use crate::anonymize::Anonymizer;
 use crate::config::{Config, Profiles, Settings};
 use crate::dates::DateRewrite;
 use crate::discovery::PluginDiscovery;
 use crate::filter::{Entry, Filter, Judgement};
 use crate::keywords::Keywords;
 use crate::lookups::Lookups;
-use crate::output::{escape_html, OutputMode};
+use crate::output::{escape_html, OutputMode, ParsedLine, Token, TokenKind};
 use crate::registry::PluginRegistry;
 use crate::source::LogFile;
 use crate::stats::{Facts, Stats, StatsSettings};
@@ -141,6 +146,9 @@ pub fn render_lines_with_jobs(
         keywords: &Keywords::none(),
         lookups: &Lookups::none(),
         stats: &StatsSettings::default(),
+        fields: &[],
+        anonymizer: None,
+        source: None,
     };
 
     renderer
@@ -221,7 +229,10 @@ pub fn render_contents_counted(
 /// The text written before the first line: the header of an output format
 /// that needs one, unless a report replaces the lines
 pub fn opening(settings: &Settings) -> String {
-    match settings.output_mode.header(&settings.theme) {
+    match settings
+        .output_mode
+        .header_with_fields(&settings.theme, &settings.fields)
+    {
         Some(header) if settings.stats.shows_lines() => header,
         _ => String::new(),
     }
@@ -310,6 +321,9 @@ struct Renderer<'a> {
     keywords: &'a Keywords,
     lookups: &'a Lookups,
     stats: &'a StatsSettings,
+    fields: &'a [String],
+    anonymizer: Option<&'a Anonymizer>,
+    source: Option<&'a str>,
 }
 
 impl<'a> Renderer<'a> {
@@ -323,6 +337,9 @@ impl<'a> Renderer<'a> {
             keywords: &settings.keywords,
             lookups: &settings.lookups,
             stats: &settings.stats,
+            fields: &settings.fields,
+            anonymizer: settings.anonymizer.as_ref(),
+            source: settings.source.as_deref(),
         }
     }
 
@@ -367,6 +384,22 @@ impl<'a> Renderer<'a> {
         rendered
     }
 
+    /// The line after the name of the file it came from, when lines of
+    /// several files are merged
+    fn label<'c>(&self, mut parsed: ParsedLine<'c>) -> ParsedLine<'c> {
+        if let Some(source) = self.source {
+            parsed.tokens.splice(
+                0..0,
+                [
+                    Token::owned(source.to_string(), TokenKind::Source),
+                    Token::owned(" ".to_string(), TokenKind::Plain),
+                ],
+            );
+        }
+
+        parsed
+    }
+
     fn render_parallel<'c>(&self, lines: &[&'c str], jobs: usize) -> Vec<JudgedLine<'c>> {
         let per_thread = lines.len().div_ceil(jobs);
 
@@ -389,6 +422,10 @@ impl<'a> Renderer<'a> {
         lines
             .iter()
             .filter_map(|raw| parser::parse_line(raw, self.mode).map(|parsed| (*raw, parsed)))
+            .map(|(raw, parsed)| match self.anonymizer {
+                Some(anonymizer) => (raw, anonymizer.apply(parsed)),
+                None => (raw, parsed),
+            })
             .map(|(raw, parsed)| {
                 let judgement = self.filter.judge(&parsed);
                 let kept = (judgement.matches && judgement.entry != Some(false)).then(|| {
@@ -399,8 +436,11 @@ impl<'a> Renderer<'a> {
                             .keywords
                             .apply(self.lookups.apply(self.dates.apply(parsed)));
 
-                        self.output_mode
-                            .render(&self.filter.highlight(rewritten), self.theme)
+                        self.output_mode.render_with_fields(
+                            &self.label(self.filter.highlight(rewritten)),
+                            self.theme,
+                            self.fields,
+                        )
                     } else {
                         String::new()
                     };

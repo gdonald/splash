@@ -57,6 +57,27 @@ pub fn push_pairs<'a>(tokens: &mut Vec<Token<'a>>, text: &'a str, value_kind: Va
     syslog::push_text(tokens, &text[cursor..]);
 }
 
+/// The `key=value` pairs in a text, each value without its quotes. A pair
+/// must open the text or follow whitespace, so a query string such as
+/// `/search?q=1` holds none.
+pub fn pairs(text: &str) -> Vec<(&str, &str)> {
+    PAIR.captures_iter(text)
+        .filter(|caps| {
+            let start = caps.get(0).unwrap().start();
+
+            text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace)
+        })
+        .map(|caps| {
+            let value = caps.get(4).or(caps.get(6)).unwrap().as_str();
+
+            (caps.get(1).unwrap().as_str(), value)
+        })
+        .collect()
+}
+
 /// The kind a log level is colored in, for the level names Go loggers use:
 /// `error`, `fatal`, and `panic` are failures, `warn` and `warning` are
 /// warnings, and the rest are levels. Case does not matter.

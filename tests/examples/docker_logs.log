@@ -1,0 +1,4 @@
+10.0.0.5 - - [03/Oct/2023:12:00:01 +0000] "GET /index.html HTTP/1.1" 200 612 "-" "curl/8.4.0"
+2023/10/03 12:00:02 [error] 29#29: *1 open() "/usr/share/nginx/html/missing" failed (2: No such file or directory), client: 10.0.0.7, server: localhost, request: "GET /missing HTTP/1.1", host: "localhost"
+the maintenance window moves to 02:00
+2023-10-03T12:00:03.123456789Z 10.0.0.9 - - [03/Oct/2023:12:00:03 +0000] "POST /login HTTP/1.1" 302 0 "-" "Mozilla/5.0"

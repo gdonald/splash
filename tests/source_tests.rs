@@ -242,3 +242,148 @@ fn invalid_bytes_in_complete_lines_are_replaced() {
         Some("alpha \u{fffd}\n")
     );
 }
+
+fn names(paths: &[std::path::PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+        .collect()
+}
+
+fn log_directory() -> TempDir {
+    let directory = TempDir::new().unwrap();
+
+    for name in ["b.log", "a.log", "notes.txt", ".hidden.log", "a.log.1"] {
+        write(directory.path(), name, b"");
+    }
+
+    directory
+}
+
+#[test]
+fn a_path_without_a_pattern_names_itself() {
+    assert_eq!(
+        source::expand("logs/missing.log").unwrap(),
+        [std::path::PathBuf::from("logs/missing.log")]
+    );
+}
+
+#[test]
+fn a_pattern_names_the_matching_files_in_name_order() {
+    let directory = log_directory();
+    let pattern = directory.path().join("*.log");
+
+    let paths = source::expand(pattern.to_str().unwrap()).unwrap();
+
+    assert_eq!(names(&paths), ["a.log", "b.log"]);
+    assert_eq!(paths[0].parent().unwrap(), directory.path());
+}
+
+#[test]
+fn a_question_mark_matches_one_character() {
+    let directory = log_directory();
+    let pattern = directory.path().join("?.log*");
+
+    assert_eq!(
+        names(&source::expand(pattern.to_str().unwrap()).unwrap()),
+        ["a.log", "a.log.1", "b.log"]
+    );
+}
+
+#[test]
+fn a_pattern_starting_with_a_dot_matches_hidden_files() {
+    let directory = log_directory();
+    let pattern = directory.path().join(".*.log");
+
+    assert_eq!(
+        names(&source::expand(pattern.to_str().unwrap()).unwrap()),
+        [".hidden.log"]
+    );
+}
+
+#[test]
+fn a_pattern_without_a_directory_matches_in_the_current_one() {
+    assert_eq!(
+        source::expand("Cargo.t?ml").unwrap(),
+        [std::path::PathBuf::from("Cargo.toml")]
+    );
+}
+
+#[test]
+fn a_pattern_matching_nothing_is_an_error() {
+    let directory = log_directory();
+    let pattern = directory.path().join("*.gz");
+    let pattern = pattern.to_str().unwrap();
+
+    let error = source::expand(pattern).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert_eq!(error.to_string(), format!("No files match '{}'", pattern));
+}
+
+#[test]
+fn a_pattern_in_a_missing_directory_is_an_error() {
+    assert!(source::expand("missing-directory/*.log").is_err());
+}
+
+#[test]
+fn wildcards_match_runs_and_single_bytes() {
+    assert!(source::wildcard_match(b"*", b""));
+    assert!(source::wildcard_match(b"a*c", b"abbbc"));
+    assert!(source::wildcard_match(b"a?c", b"abc"));
+    assert!(!source::wildcard_match(b"a?c", b"ac"));
+    assert!(!source::wildcard_match(b"a*c", b"abd"));
+    assert!(!source::wildcard_match(b"abc", b"ab"));
+}
+
+fn nested_directory() -> TempDir {
+    let directory = TempDir::new().unwrap();
+
+    fs::create_dir_all(directory.path().join("api/old")).unwrap();
+    fs::create_dir_all(directory.path().join(".cache")).unwrap();
+
+    for name in [
+        "web.log",
+        ".hidden.log",
+        "api/api.log",
+        "api/old/api.log.1",
+        ".cache/cached.log",
+    ] {
+        write(directory.path(), name, b"");
+    }
+
+    directory
+}
+
+fn relative(directory: &Path, paths: Vec<std::path::PathBuf>) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.strip_prefix(directory).unwrap().display().to_string())
+        .collect()
+}
+
+#[test]
+fn a_directory_holds_its_files_without_hidden_ones_or_subdirectories() {
+    let directory = nested_directory();
+
+    let files = source::files_in(directory.path(), false).unwrap();
+
+    assert_eq!(relative(directory.path(), files), ["web.log"]);
+}
+
+#[test]
+fn a_directory_read_recursively_holds_the_files_of_its_subdirectories() {
+    let directory = nested_directory();
+
+    let files = source::files_in(directory.path(), true).unwrap();
+
+    assert_eq!(
+        relative(directory.path(), files),
+        ["api/api.log", "api/old/api.log.1", "web.log"]
+    );
+}
+
+#[test]
+fn a_missing_directory_cannot_be_listed() {
+    assert!(source::files_in(Path::new("missing-directory"), false).is_err());
+}

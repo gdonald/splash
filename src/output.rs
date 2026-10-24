@@ -2,7 +2,10 @@
 ///
 /// A parsed line is a sequence of styled tokens. Each output mode renders that
 /// same sequence differently: ANSI escapes for terminals, HTML for a browser,
-/// JSON for other programs, and plain text for scripting.
+/// JSON for other programs, JSON Lines and CSV keyed by field for analysis,
+/// and plain text for scripting.
+use crate::json;
+use crate::logfmt;
 use crate::theme::Theme;
 use std::borrow::Cow;
 use std::fmt;
@@ -63,6 +66,7 @@ pub enum TokenKind {
     UnknownUser,
     Service,
     Location,
+    Source,
 }
 
 impl TokenKind {
@@ -121,11 +125,12 @@ impl TokenKind {
             TokenKind::UnknownUser => "unknown_user",
             TokenKind::Service => "service",
             TokenKind::Location => "location",
+            TokenKind::Source => "source",
         }
     }
 
     /// The number of distinct token styles
-    pub const COUNT: usize = 52;
+    pub const COUNT: usize = 53;
 
     /// Position of this style in `all()`, used to index a theme
     pub fn index(&self) -> usize {
@@ -197,6 +202,7 @@ impl TokenKind {
             TokenKind::UnknownUser,
             TokenKind::Service,
             TokenKind::Location,
+            TokenKind::Source,
         ]
     }
 }
@@ -267,7 +273,7 @@ impl fmt::Display for UnknownOutputMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Unknown output mode '{}' (expected ansi, curses, html, json, or plain)",
+            "Unknown output mode '{}' (expected ansi, csv, curses, html, json, jsonl, or plain)",
             self.0
         )
     }
@@ -280,9 +286,11 @@ impl std::error::Error for UnknownOutputMode {}
 pub enum OutputMode {
     #[default]
     Ansi,
+    Csv,
     Curses,
     Html,
     Json,
+    Jsonl,
     Plain,
 }
 
@@ -292,9 +300,11 @@ impl FromStr for OutputMode {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.to_ascii_lowercase().as_str() {
             "ansi" | "color" => Ok(OutputMode::Ansi),
+            "csv" => Ok(OutputMode::Csv),
             "curses" | "tui" => Ok(OutputMode::Curses),
             "html" => Ok(OutputMode::Html),
             "json" => Ok(OutputMode::Json),
+            "jsonl" => Ok(OutputMode::Jsonl),
             "plain" | "none" => Ok(OutputMode::Plain),
             _ => Err(UnknownOutputMode(value.to_string())),
         }
@@ -305,9 +315,11 @@ impl fmt::Display for OutputMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             OutputMode::Ansi => "ansi",
+            OutputMode::Csv => "csv",
             OutputMode::Curses => "curses",
             OutputMode::Html => "html",
             OutputMode::Json => "json",
+            OutputMode::Jsonl => "jsonl",
             OutputMode::Plain => "plain",
         };
 
@@ -318,8 +330,15 @@ impl fmt::Display for OutputMode {
 impl OutputMode {
     /// Text written before the first line, if the format needs a preamble
     pub fn header(&self, theme: &Theme) -> Option<String> {
+        self.header_with_fields(theme, &[])
+    }
+
+    /// Text written before the first line, with the fields `--fields` named,
+    /// which give CSV its header row
+    pub fn header_with_fields(&self, theme: &Theme, fields: &[String]) -> Option<String> {
         match self {
             OutputMode::Html => Some(html_header(theme)),
+            OutputMode::Csv => Some(format!("{}\n", csv_row(csv_columns(fields)))),
             _ => None,
         }
     }
@@ -339,10 +358,24 @@ impl OutputMode {
 
     /// Renders one parsed line in this mode, painted with `theme`
     pub fn render(&self, line: &ParsedLine<'_>, theme: &Theme) -> String {
+        self.render_with_fields(line, theme, &[])
+    }
+
+    /// Renders one parsed line, writing only the fields `--fields` named in
+    /// the formats keyed by field. No fields leaves JSON Lines every field and
+    /// CSV the line text.
+    pub fn render_with_fields(
+        &self,
+        line: &ParsedLine<'_>,
+        theme: &Theme,
+        fields: &[String],
+    ) -> String {
         match self {
             OutputMode::Ansi | OutputMode::Curses => render_ansi(line, theme),
+            OutputMode::Csv => render_csv(line, fields),
             OutputMode::Html => render_html(line),
             OutputMode::Json => render_json(line),
+            OutputMode::Jsonl => render_jsonl(line, fields),
             OutputMode::Plain => line.text(),
         }
     }
@@ -383,9 +416,181 @@ fn render_json(line: &ParsedLine<'_>) -> String {
 
     format!(
         "{{\"text\":\"{}\",\"tokens\":[{}]}}",
-        escape_json(&line.text()),
+        escape_json(&logged_text(line)),
         tokens.join(",")
     )
+}
+
+/// The field that holds a line's text in the formats keyed by field
+pub const TEXT_FIELD: &str = "text";
+
+/// The field that holds the structure a line was written in
+pub const RECORD_FIELD: &str = "record";
+
+/// Whether `name` is a field `--fields` can name: the line text, its record,
+/// or a token kind
+pub fn is_field_name(name: &str) -> bool {
+    name == TEXT_FIELD || name == RECORD_FIELD || TokenKind::from_name(name).is_some()
+}
+
+/// The structure a line was written in, as JSON: a line that is a JSON
+/// object is kept as it is, nesting and value types included, and the
+/// `key=value` pairs of a line become an object of strings. A line in
+/// neither form has no record.
+pub fn record(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+
+    if json::parse_object(trimmed, |_, _| None).is_some() {
+        return Some(trimmed.to_string());
+    }
+
+    let pairs = logfmt::pairs(text);
+
+    if pairs.is_empty() {
+        return None;
+    }
+
+    let members: Vec<String> = pairs
+        .iter()
+        .map(|(key, value)| format!("\"{}\":\"{}\"", escape_json(key), escape_json(value)))
+        .collect();
+
+    Some(format!("{{{}}}", members.join(",")))
+}
+
+/// The values of each field a line holds, keyed by kind, in the order the
+/// kinds first appear. Plain text, punctuation, the keys of key-value pairs,
+/// and tokens holding only whitespace are not fields.
+fn line_fields<'l>(line: &'l ParsedLine<'_>) -> Vec<(&'static str, Vec<&'l str>)> {
+    let mut fields: Vec<(&str, Vec<&str>)> = Vec::new();
+
+    for token in &line.tokens {
+        if !is_field_kind(token.kind) || token.text.trim().is_empty() {
+            continue;
+        }
+
+        match fields
+            .iter_mut()
+            .find(|(name, _)| *name == token.kind.name())
+        {
+            Some((_, values)) => values.push(&token.text),
+            None => fields.push((token.kind.name(), vec![&token.text])),
+        }
+    }
+
+    fields
+}
+
+/// The line as the log wrote it, without the label naming the file a merged
+/// line came from
+fn logged_text(line: &ParsedLine<'_>) -> String {
+    let skipped = match line.tokens.first() {
+        Some(token) if token.kind == TokenKind::Source => 2,
+        _ => 0,
+    };
+
+    line.tokens
+        .iter()
+        .skip(skipped)
+        .map(|token| token.text.as_ref())
+        .collect()
+}
+
+fn is_field_kind(kind: TokenKind) -> bool {
+    !matches!(
+        kind,
+        TokenKind::Plain | TokenKind::Punctuation | TokenKind::Header
+    )
+}
+
+/// One object holding the line text, each field the line holds, keyed by
+/// its kind, and the line's record when it has one, or only the named
+/// members the line holds, in the order named. A kind the line holds more
+/// than once is an array of its values, in order.
+fn render_jsonl(line: &ParsedLine<'_>, names: &[String]) -> String {
+    let text = logged_text(line);
+
+    let mut members: Vec<(&str, String)> = vec![(TEXT_FIELD, json_string(&text))];
+
+    for (name, values) in line_fields(line) {
+        let quoted: Vec<String> = values.iter().map(|value| json_string(value)).collect();
+
+        match quoted.as_slice() {
+            [single] => members.push((name, single.clone())),
+            _ => members.push((name, format!("[{}]", quoted.join(",")))),
+        }
+    }
+
+    if let Some(record) = record(&text) {
+        members.push((RECORD_FIELD, record));
+    }
+
+    if !names.is_empty() {
+        members = names
+            .iter()
+            .filter_map(|name| members.iter().find(|(member, _)| member == name).cloned())
+            .collect();
+    }
+
+    let members: Vec<String> = members
+        .iter()
+        .map(|(name, value)| format!("\"{}\":{}", name, value))
+        .collect();
+
+    format!("{{{}}}", members.join(","))
+}
+
+fn json_string(text: &str) -> String {
+    format!("\"{}\"", escape_json(text))
+}
+
+/// The columns CSV writes: the named fields, or the line text alone
+fn csv_columns(names: &[String]) -> Vec<&str> {
+    match names {
+        [] => vec![TEXT_FIELD],
+        _ => names.iter().map(String::as_str).collect(),
+    }
+}
+
+/// One CSV row holding each named field of the line. A field the line holds
+/// more than once has its values joined by spaces, and one it lacks is empty.
+fn render_csv(line: &ParsedLine<'_>, names: &[String]) -> String {
+    let text = logged_text(line);
+    let fields = line_fields(line);
+
+    let cells: Vec<String> = csv_columns(names)
+        .into_iter()
+        .map(|name| match name {
+            TEXT_FIELD => text.clone(),
+            RECORD_FIELD => record(&text).unwrap_or_default(),
+            _ => fields
+                .iter()
+                .find(|(kind, _)| *kind == name)
+                .map(|(_, values)| values.join(" "))
+                .unwrap_or_default(),
+        })
+        .collect();
+
+    csv_row(cells)
+}
+
+/// Joins cells into a CSV row, quoting a cell that holds a comma, a quote,
+/// or a line break (RFC 4180)
+fn csv_row<S: AsRef<str>>(cells: Vec<S>) -> String {
+    let quoted: Vec<String> = cells
+        .iter()
+        .map(|cell| {
+            let cell = cell.as_ref();
+
+            if cell.contains([',', '"', '\n', '\r']) {
+                format!("\"{}\"", cell.replace('"', "\"\""))
+            } else {
+                cell.to_string()
+            }
+        })
+        .collect();
+
+    quoted.join(",")
 }
 
 /// Escapes text for embedding in an HTML element

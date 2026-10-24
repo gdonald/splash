@@ -1,0 +1,5 @@
+I1003 12:00:01.123456       1 controller.go:123] Starting endpoint controller
+the maintenance window moves to 02:00
+2023-10-03T12:00:02.123456789Z 10.0.0.5 - - [03/Oct/2023:12:00:02 +0000] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.28"
+[pod/web-7d4b9c6f5-abcde/nginx] 10.0.0.7 - - [03/Oct/2023:12:00:03 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.4.0"
+[pod/web-7d4b9c6f5-abcde/nginx] 2023-10-03T12:00:04.123456789Z the maintenance window moves to 02:00
