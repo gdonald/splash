@@ -23,7 +23,7 @@ status = "white bold"
 
 [plugins.syslog]
 enabled = "true"
-facility = "cyan"
+level = "cyan"
 
 [plugins.squid]
 enabled = "false"
@@ -135,7 +135,7 @@ fn a_config_groups_settings_under_the_plugin_they_belong_to() {
     let config = config();
     let syslog = config.plugin_settings("syslog").unwrap();
 
-    assert_eq!(syslog.get("facility"), Some(&"cyan".to_string()));
+    assert_eq!(syslog.get("level"), Some(&"cyan".to_string()));
 }
 
 #[test]
@@ -1046,4 +1046,122 @@ fn the_curses_viewer_runs_without_statistics() {
     };
 
     assert!(resolve_with("", options).is_ok());
+}
+
+#[test]
+fn a_plugin_enabled_setting_must_be_true_or_false() {
+    let error = Config::parse("[plugins.syslog]\nenabled = \"no\"\n", "test.toml").unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::BadEnabled {
+            plugin: "syslog".to_string(),
+            value: "no".to_string()
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "Invalid value 'no' for plugins.syslog.enabled (expected true or false)"
+    );
+}
+
+#[test]
+fn a_plugin_setting_that_is_not_a_color_key_is_rejected() {
+    let error = Config::parse("[plugins.syslog]\nfacility = \"cyan\"\n", "test.toml").unwrap_err();
+
+    assert_eq!(
+        error,
+        ConfigError::UnknownKey("plugins.syslog.facility".to_string())
+    );
+}
+
+#[test]
+fn plugin_colors_leave_out_the_enabled_setting() {
+    assert_eq!(
+        config().plugin_colors("syslog"),
+        [("level".to_string(), "cyan".to_string())]
+    );
+}
+
+#[test]
+fn a_plugin_without_a_table_has_no_colors() {
+    assert!(config().plugin_colors("postfix").is_empty());
+}
+
+fn plugin_colored(mode: &str, colors: Vec<String>) -> Settings {
+    let options = Options {
+        mode: Some(mode.to_string()),
+        colors,
+        ..Options::default()
+    };
+
+    settings(options, &config()).unwrap()
+}
+
+#[test]
+fn a_plugin_mode_renders_with_the_colors_configured_for_the_plugin() {
+    let resolved = plugin_colored("syslog", vec![]);
+
+    assert_eq!(
+        resolved.theme_for("syslog").style(TokenKind::Level),
+        Style::new(Color::Cyan)
+    );
+    assert_eq!(
+        resolved.theme_for("syslog").style(TokenKind::Ip),
+        Style::new(Color::BrightCyan)
+    );
+}
+
+#[test]
+fn a_detected_plugin_mode_renders_with_the_colors_configured_for_the_plugin() {
+    let resolved = plugin_colored("auto", vec![]);
+
+    assert_eq!(
+        resolved.theme_for("auto:syslog").style(TokenKind::Level),
+        Style::new(Color::Cyan)
+    );
+}
+
+#[test]
+fn another_mode_renders_with_the_theme() {
+    let resolved = plugin_colored("syslog", vec![]);
+
+    assert_eq!(resolved.theme_for("squid"), &resolved.theme);
+    assert_ne!(
+        resolved.theme.style(TokenKind::Level),
+        Style::new(Color::Cyan)
+    );
+}
+
+#[test]
+fn a_color_option_wins_over_a_plugin_color() {
+    let resolved = plugin_colored("syslog", vec!["level=red".to_string()]);
+
+    assert_eq!(
+        resolved.theme_for("syslog").style(TokenKind::Level),
+        Style::new(Color::Red)
+    );
+}
+
+#[test]
+fn a_plugin_color_that_is_not_a_color_is_rejected() {
+    let config = Config::parse("[plugins.syslog]\nlevel = \"plaid\"\n", "test.toml").unwrap();
+
+    assert!(settings(Options::default(), &config).is_err());
+}
+
+#[test]
+fn colors_configured_under_a_mode_alias_apply_to_the_mode() {
+    let config = Config::parse("[plugins.k8s]\nlevel = \"red\"\n", "test.toml").unwrap();
+    let options = Options {
+        mode: Some("kubernetes".to_string()),
+        ..Options::default()
+    };
+
+    let resolved = settings(options, &config).unwrap();
+
+    assert_eq!(
+        resolved.theme_for("kubernetes").style(TokenKind::Level),
+        Style::new(Color::Red)
+    );
 }

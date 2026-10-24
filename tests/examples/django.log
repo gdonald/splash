@@ -1,0 +1,6 @@
+[2023-10-03 12:00:01 +0000] [4100] [INFO] Starting gunicorn 21.2.0
+[2023-10-03 12:00:01 +0000] [4101] [INFO] Booting worker with pid: 4101
+[2023-10-03 12:00:02,118] INFO django.utils.autoreload: Watching for file changes with StatReloader
+[2023-10-03 12:05:12,431] ERROR django.request: Internal Server Error: /reports/export
+[2023-10-03 12:05:13,007] WARNING django.security.csrf: Forbidden (CSRF token missing.): /orders/
+[2023-10-03 12:05:42 +0000] [4100] [CRITICAL] WORKER TIMEOUT (pid:4101)

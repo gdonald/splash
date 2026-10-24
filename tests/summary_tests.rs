@@ -136,7 +136,7 @@ fn the_summary_lists_every_discovery_path() {
 
 fn configured() -> Config {
     Config::parse(
-        "[plugins.syslog]\nfacility = \"cyan\"\n\n[plugins.squid]\nenabled = \"false\"\n",
+        "[plugins.syslog]\nlevel = \"cyan\"\n\n[plugins.squid]\nenabled = \"false\"\n",
         "test.toml",
     )
     .unwrap()
@@ -147,7 +147,7 @@ fn the_summary_lists_the_settings_configured_for_each_plugin() {
     let summary = plugin_summary(&PluginRegistry::new(), &discovery(), &configured());
 
     assert!(summary.ends_with(
-        "Plugin configuration:\n  squid (disabled)\n    enabled = false\n  syslog (enabled)\n    facility = cyan\n"
+        "Plugin configuration:\n  squid (disabled)\n    enabled = false\n  syslog (enabled)\n    level = cyan\n"
     ));
 }
 

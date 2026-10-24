@@ -90,6 +90,7 @@ use crate::source::LogFile;
 use crate::stats::{Facts, Stats, StatsSettings};
 use crate::theme::Theme;
 use crate::viewer::Line;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::thread;
@@ -150,6 +151,7 @@ pub fn render_lines_with_jobs(
         fields: &[],
         anonymizer: None,
         source: None,
+        plugin_themes: &BTreeMap::new(),
     };
 
     renderer
@@ -232,7 +234,7 @@ pub fn render_contents_counted(
 pub fn opening(settings: &Settings) -> String {
     match settings
         .output_mode
-        .header_with_fields(&settings.theme, &settings.fields)
+        .header_with_fields(settings.theme_for(&settings.mode), &settings.fields)
     {
         Some(header) if settings.stats.shows_lines() => header,
         _ => String::new(),
@@ -325,6 +327,7 @@ struct Renderer<'a> {
     fields: &'a [String],
     anonymizer: Option<&'a Anonymizer>,
     source: Option<&'a str>,
+    plugin_themes: &'a BTreeMap<String, Theme>,
 }
 
 impl<'a> Renderer<'a> {
@@ -341,6 +344,7 @@ impl<'a> Renderer<'a> {
             fields: &settings.fields,
             anonymizer: settings.anonymizer.as_ref(),
             source: settings.source.as_deref(),
+            plugin_themes: &settings.plugin_themes,
         }
     }
 
@@ -353,8 +357,10 @@ impl<'a> Renderer<'a> {
         stats: &mut Stats,
     ) -> Vec<(&'c str, String)> {
         let mode = detect::resolve_mode(self.mode, contents);
+        let detected = detect::detected_mode(&mode).unwrap_or(&mode);
         let renderer = Renderer {
             mode: &mode,
+            theme: self.plugin_themes.get(detected).unwrap_or(self.theme),
             ..*self
         };
         let lines: Vec<&str> = contents.lines().collect();

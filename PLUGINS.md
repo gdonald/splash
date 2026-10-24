@@ -46,6 +46,7 @@ other = '^(?P<timestamp>\S+ \S+) (?P<level>[A-Z]+) (?P<message>.*)$'
 | `version` | No | `MAJOR.MINOR.PATCH`, `1.0.0` when left out |
 | `description` | No | Shown by `--list-plugins` |
 | `author` | No | Shown by `--list-plugins` |
+| `requires` | No | Plugins that read the lines no pattern reads, as `"NAME"` or `"NAME MAJOR.MINOR.PATCH"`, separated by commas |
 | `[patterns]` | Yes | One or more regular expressions, each under a name of your choosing |
 
 Any other key is an error. The name cannot be one splash uses itself: a built-in plugin's name,
@@ -69,6 +70,21 @@ before or after an unanchored match, is plain. A group inside another named grou
 that matched no text, add nothing. A named group that is not a color key is an error, and an
 unnamed group `( )` is allowed anywhere.
 
+### Requiring other plugins
+
+`requires` names plugins, built-in or loaded from another file, that read the lines none of the
+plugin's own patterns read. They are tried in the order listed. A plugin for an application that
+logs into Gunicorn's error log reads its own lines and leaves Gunicorn's to the gunicorn plugin:
+
+```toml
+name = "django"
+requires = "gunicorn 1.0.0"
+```
+
+A version after the name is the lowest version the plugin works with: the required plugin must
+have the same major version and a version at least that high. splash registers each plugin file
+after the plugin files it requires, whatever their names.
+
 What the groups are named for decides more than color:
 
 | Group | Used by |
@@ -90,7 +106,9 @@ Cannot load plugin /home/alice/.splash/plugins/orders.toml: pattern 'placed' nam
 
 The reasons are a TOML syntax error with its line number, a missing name, a built-in name, a
 version that is not three numbers, an unknown key, no `[patterns]`, a pattern that is not a
-regular expression, and a named group that is not a color key.
+regular expression, a named group that is not a color key, a requirement that is not a name and
+an optional version, a required plugin that is not loaded or whose version is incompatible, and
+plugin files that require each other.
 
 ---
 
@@ -153,7 +171,9 @@ splash --test-regex ~/.splash/plugins/orders.toml --path orders.log
 3 of 3 lines matched
 ```
 
-Blank lines are skipped. With several `--path` files, each file's report follows a
+A line a required plugin reads is reported as `read by required plugin NAME`, and the required
+plugins are looked up among the plugin files splash loads, so test with the same `--plugin-dir`
+options the plugin is used with. Blank lines are skipped. With several `--path` files, each file's report follows a
 `==> PATH <==` header. A plugin file that cannot be loaded exits with an error naming the reason.
 
 ### Use it
@@ -188,7 +208,8 @@ Raising `version` in each save shows in the report which save was loaded.
 ### Examples
 
 [`examples/plugins/`](examples/plugins/) holds plugins for Gunicorn error logs, Celery worker
-logs, and uWSGI request logs. Try one without installing it:
+logs, uWSGI request logs, and Django application logs in a Gunicorn error log, which requires the
+Gunicorn plugin. Try one without installing it:
 
 ```bash
 splash --plugin-dir examples/plugins --mode celery --path /var/log/celery/worker.log

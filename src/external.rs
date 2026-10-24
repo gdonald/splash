@@ -19,11 +19,11 @@
 use crate::discovery::PluginDiscovery;
 use crate::output::{ParsedLine, Token, TokenKind};
 use crate::plugin::{ParseResult, Plugin, PluginMetadata, PluginVersion};
-use crate::registry;
+use crate::registry::{self, PluginRegistry};
 use crate::toml::{self, TomlError};
 use notify::{Config as WatchConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,8 +43,22 @@ pub enum PluginError {
     BadVersion(String),
     UnknownKey(String),
     NoPatterns,
-    BadPattern { name: String, error: String },
-    UnknownGroup { pattern: String, group: String },
+    BadPattern {
+        name: String,
+        error: String,
+    },
+    UnknownGroup {
+        pattern: String,
+        group: String,
+    },
+    BadRequirement(String),
+    MissingDependency(String),
+    IncompatibleDependency {
+        name: String,
+        required: PluginVersion,
+        found: PluginVersion,
+    },
+    DependencyCycle(Vec<String>),
 }
 
 impl fmt::Display for PluginError {
@@ -75,6 +89,28 @@ impl fmt::Display for PluginError {
                 "pattern '{}' names group '{}', which is not a color key",
                 pattern, group
             ),
+            PluginError::BadRequirement(text) => write!(
+                f,
+                "invalid requirement '{}' (expected NAME or NAME MAJOR.MINOR.PATCH)",
+                text
+            ),
+            PluginError::MissingDependency(name) => {
+                write!(f, "requires plugin '{}', which is not loaded", name)
+            }
+            PluginError::IncompatibleDependency {
+                name,
+                required,
+                found,
+            } => write!(
+                f,
+                "requires plugin '{}' {}, but version {} is loaded",
+                name, required, found
+            ),
+            PluginError::DependencyCycle(names) => write!(
+                f,
+                "its requirements form a cycle among {}",
+                names.join(", ")
+            ),
         }
     }
 }
@@ -88,11 +124,20 @@ pub struct Pattern {
     pub regex: Regex,
 }
 
+/// A plugin another plugin requires, and the lowest compatible version
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Requirement {
+    pub name: String,
+    pub version: Option<PluginVersion>,
+}
+
 /// A plugin read from a TOML file
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TomlPlugin {
     metadata: PluginMetadata,
     patterns: Vec<Pattern>,
+    requires: Vec<Requirement>,
+    dependencies: Vec<Arc<dyn Plugin>>,
 }
 
 impl TomlPlugin {
@@ -111,6 +156,7 @@ impl TomlPlugin {
         let mut description = String::new();
         let mut author = String::new();
         let mut patterns = Vec::new();
+        let mut requires = Vec::new();
 
         for (key, value) in toml::parse(text).map_err(PluginError::Syntax)? {
             match key.split_once('.') {
@@ -118,6 +164,7 @@ impl TomlPlugin {
                 None if key == "version" => version = parse_version(&value)?,
                 None if key == "description" => description = value,
                 None if key == "author" => author = value,
+                None if key == "requires" => requires = parse_requirements(&value)?,
                 Some(("patterns", pattern)) => patterns.push(compile(pattern, &value)?),
                 _ => return Err(PluginError::UnknownKey(key)),
             }
@@ -136,7 +183,31 @@ impl TomlPlugin {
         Ok(TomlPlugin {
             metadata: PluginMetadata::new(&name, version, &description, &author),
             patterns,
+            requires,
+            dependencies: Vec::new(),
         })
+    }
+
+    /// The plugins this plugin requires, in file order
+    pub fn requires(&self) -> &[Requirement] {
+        &self.requires
+    }
+
+    /// The plugin with each required plugin looked up in a registry, which
+    /// reads the lines none of its own patterns read
+    pub fn resolve(mut self, registry: &PluginRegistry) -> Result<TomlPlugin, PluginError> {
+        self.dependencies = self
+            .requires
+            .iter()
+            .map(|requirement| dependency(registry, requirement))
+            .collect::<Result<_, _>>()?;
+
+        Ok(self)
+    }
+
+    /// The required plugins found by `resolve`
+    pub fn dependencies(&self) -> &[Arc<dyn Plugin>] {
+        &self.dependencies
     }
 
     /// The plugin's patterns, in file order
@@ -158,10 +229,70 @@ impl Plugin for TomlPlugin {
     }
 
     fn parse_line<'a>(&self, line: &'a str) -> ParseResult<'a> {
-        match self.read(line) {
-            Some((_, parsed)) => ParseResult::Parsed(parsed),
-            None => ParseResult::NoMatch,
+        if let Some((_, parsed)) = self.read(line) {
+            return ParseResult::Parsed(parsed);
         }
+
+        self.dependencies
+            .iter()
+            .map(|plugin| plugin.parse_line(line))
+            .find(|result| matches!(result, ParseResult::Parsed(_)))
+            .unwrap_or(ParseResult::NoMatch)
+    }
+}
+
+impl fmt::Debug for TomlPlugin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TomlPlugin")
+            .field("metadata", &self.metadata)
+            .field("patterns", &self.patterns)
+            .field("requires", &self.requires)
+            .finish()
+    }
+}
+
+/// Reads a comma-separated list of requirements, each `NAME` or
+/// `NAME MAJOR.MINOR.PATCH`
+fn parse_requirements(text: &str) -> Result<Vec<Requirement>, PluginError> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| {
+            let words: Vec<&str> = item.split_whitespace().collect();
+            let bad = || PluginError::BadRequirement(item.to_string());
+
+            match words.as_slice() {
+                [name] => Ok(Requirement {
+                    name: name.to_string(),
+                    version: None,
+                }),
+                [name, version] => Ok(Requirement {
+                    name: name.to_string(),
+                    version: Some(parse_version(version).map_err(|_| bad())?),
+                }),
+                _ => Err(bad()),
+            }
+        })
+        .collect()
+}
+
+fn dependency(
+    registry: &PluginRegistry,
+    requirement: &Requirement,
+) -> Result<Arc<dyn Plugin>, PluginError> {
+    let plugin = registry
+        .get(&requirement.name)
+        .map_err(|_| PluginError::MissingDependency(requirement.name.clone()))?;
+
+    match &requirement.version {
+        Some(required) if !plugin.version().is_compatible_with(required) => {
+            Err(PluginError::IncompatibleDependency {
+                name: requirement.name.clone(),
+                required: required.clone(),
+                found: plugin.version().clone(),
+            })
+        }
+        _ => Ok(plugin),
     }
 }
 
@@ -257,9 +388,10 @@ impl PluginSet {
     }
 
     /// Loads the plugin files and registers each plugin, returning a report
-    /// for each file that could not be loaded. A file that cannot be loaded
-    /// leaves the plugin it registered before. The plugin of a file that is
-    /// gone, or that now names another plugin, is unregistered.
+    /// for each file that could not be loaded. A plugin is registered after
+    /// the plugin files it requires. A file that cannot be loaded leaves the
+    /// plugin it registered before. The plugin of a file that is gone, or
+    /// that now names another plugin, is unregistered.
     pub fn load(&mut self, paths: &[PathBuf]) -> Vec<String> {
         let registry = registry::builtins();
         let mut failures = Vec::new();
@@ -274,26 +406,63 @@ impl PluginSet {
             kept
         });
 
+        let mut pending = Vec::new();
+
         for path in paths {
-            let plugin = match TomlPlugin::load(path) {
-                Ok(plugin) => plugin,
-                Err(error) => {
-                    failures.push(format!("Cannot load plugin {}: {}", path.display(), error));
-                    continue;
+            match TomlPlugin::load(path) {
+                Ok(plugin) => pending.push((path.clone(), plugin)),
+                Err(error) => failures.push(failure(path, &error)),
+            }
+        }
+
+        while !pending.is_empty() {
+            let waiting_names: HashSet<String> = pending
+                .iter()
+                .map(|(_, plugin)| plugin.name().to_string())
+                .collect();
+
+            let (ready, waiting): (Vec<_>, Vec<_>) =
+                pending.into_iter().partition(|(_, plugin)| {
+                    plugin
+                        .requires()
+                        .iter()
+                        .all(|requirement| !waiting_names.contains(&requirement.name))
+                });
+
+            if ready.is_empty() {
+                let mut names: Vec<String> = waiting_names.into_iter().collect();
+                names.sort();
+
+                for (path, _) in &waiting {
+                    failures.push(failure(path, &PluginError::DependencyCycle(names.clone())));
                 }
-            };
 
-            let name = plugin.name().to_string();
-
-            if let Some(previous) = self.names.insert(path.clone(), name.clone()) {
-                let _ = registry.unregister(&previous);
+                break;
             }
 
-            let _ = registry.unregister(&name);
-            let _ = registry.register(Arc::new(plugin));
+            for (path, plugin) in ready {
+                match plugin.resolve(registry) {
+                    Ok(plugin) => self.register(path, plugin),
+                    Err(error) => failures.push(failure(&path, &error)),
+                }
+            }
+
+            pending = waiting;
         }
 
         failures
+    }
+
+    fn register(&mut self, path: PathBuf, plugin: TomlPlugin) {
+        let registry = registry::builtins();
+        let name = plugin.name().to_string();
+
+        if let Some(previous) = self.names.insert(path, name.clone()) {
+            let _ = registry.unregister(&previous);
+        }
+
+        let _ = registry.unregister(&name);
+        let _ = registry.register(Arc::new(plugin));
     }
 
     /// The name and version of each plugin the files registered, in name
@@ -316,6 +485,10 @@ impl PluginSet {
         names.sort();
         names
     }
+}
+
+fn failure(path: &Path, error: &PluginError) -> String {
+    format!("Cannot load plugin {}: {}", path.display(), error)
 }
 
 /// Reloads the plugin files whenever a file in the search paths changes,
@@ -358,7 +531,8 @@ pub fn watch(
 
 /// How a plugin's patterns read some lines: for each line that is not
 /// blank, the pattern that read it and the text of each named group that
-/// matched, or that no pattern read it, then a count of the lines read
+/// matched, the required plugin that read it, or that nothing read it, then
+/// a count of the lines read
 pub struct RegexReport {
     pub text: String,
     pub unmatched: usize,
@@ -382,8 +556,22 @@ pub fn test_patterns(plugin: &TomlPlugin, text: &str) -> RegexReport {
             .iter()
             .find(|pattern| pattern.regex.is_match(line))
         else {
-            unmatched += 1;
-            report.push_str(&format!("{}: no pattern matched\n   {}\n", index + 1, line));
+            match plugin
+                .dependencies()
+                .iter()
+                .find(|dependency| dependency.can_parse(line))
+            {
+                Some(dependency) => report.push_str(&format!(
+                    "{}: read by required plugin {}\n",
+                    index + 1,
+                    dependency.name()
+                )),
+                None => {
+                    unmatched += 1;
+                    report.push_str(&format!("{}: no pattern matched\n   {}\n", index + 1, line));
+                }
+            }
+
             continue;
         };
 

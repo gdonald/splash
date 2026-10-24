@@ -6,10 +6,11 @@
 //! over the file, and saved color profiles live in `~/.splash/profiles/`.
 use crate::anonymize::Anonymizer;
 use crate::dates::{DateOptions, DateRewrite, UnknownZone};
+use crate::detect;
 use crate::filter::{Filter, FilterError, FilterOptions};
 use crate::keywords::{KeywordError, Keywords};
 use crate::lookups::{LookupError, Lookups};
-use crate::output::{self, OutputMode, UnknownOutputMode};
+use crate::output::{self, OutputMode, TokenKind, UnknownOutputMode};
 use crate::registry;
 use crate::stats::{StatsError, StatsOptions, StatsSettings};
 use crate::theme::{Theme, ThemeError};
@@ -44,6 +45,7 @@ pub enum ConfigError {
     Stats(StatsError),
     StatsInViewer,
     UnknownField(String),
+    BadEnabled { plugin: String, value: String },
 }
 
 impl fmt::Display for ConfigError {
@@ -70,6 +72,11 @@ impl fmt::Display for ConfigError {
             ConfigError::Filter(error) => write!(f, "{}", error),
             ConfigError::Zone(error) => write!(f, "{}", error),
             ConfigError::Keyword(error) => write!(f, "{}", error),
+            ConfigError::BadEnabled { plugin, value } => write!(
+                f,
+                "Invalid value '{}' for plugins.{}.enabled (expected true or false)",
+                value, plugin
+            ),
             ConfigError::BadWordcolor(value) => write!(
                 f,
                 "Invalid wordcolor setting '{}' (expected true or false)",
@@ -174,6 +181,17 @@ impl Config {
                 ["lookups", name] => {
                     config.lookups.insert(name.to_string(), value);
                 }
+                ["plugins", plugin, "enabled"] if value != "true" && value != "false" => {
+                    return Err(ConfigError::BadEnabled {
+                        plugin: plugin.to_string(),
+                        value,
+                    })
+                }
+                ["plugins", _, name]
+                    if *name != "enabled" && TokenKind::from_name(name).is_none() =>
+                {
+                    return Err(ConfigError::UnknownKey(key))
+                }
                 ["plugins", plugin, name] => {
                     config
                         .plugins
@@ -242,6 +260,16 @@ impl Config {
             .and_then(|settings| settings.get("enabled"))
             .map(|value| value != "false")
             .unwrap_or(true)
+    }
+
+    /// The colors configured for one plugin, as color key and color pairs
+    pub fn plugin_colors(&self, name: &str) -> Vec<(String, String)> {
+        self.plugin_settings(name)
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| *key != "enabled")
+            .map(|(key, color)| (key.clone(), color.clone()))
+            .collect()
     }
 
     /// Plugins the config turns off, in name order
@@ -401,6 +429,9 @@ pub struct Settings {
     /// The name each line is labeled with, when lines of several files are
     /// merged
     pub source: Option<String>,
+    /// The theme of each plugin the config sets colors for, used in place
+    /// of `theme` when that plugin's mode is chosen or detected
+    pub plugin_themes: BTreeMap<String, Theme>,
 }
 
 /// Mode used when neither the command line nor the config file names one
@@ -429,10 +460,26 @@ impl Settings {
 
         apply_pairs(&mut theme, &config.colors)?;
 
-        for value in &options.colors {
-            let (key, color) = parse_override(value)?;
-            theme.apply_override(&key, &color)?;
+        let overrides = options
+            .colors
+            .iter()
+            .map(|value| parse_override(value))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut plugin_themes = BTreeMap::new();
+
+        for name in config.configured_plugins() {
+            let colors = config.plugin_colors(name);
+
+            if !colors.is_empty() {
+                let mut plugin_theme = theme.clone();
+                apply_pairs(&mut plugin_theme, &colors)?;
+                apply_pairs(&mut plugin_theme, &overrides)?;
+                plugin_themes.insert(registry::canonical_mode(name).to_string(), plugin_theme);
+            }
         }
+
+        apply_pairs(&mut theme, &overrides)?;
 
         let mode = options
             .mode
@@ -471,7 +518,17 @@ impl Settings {
             fields: resolve_fields(&options.fields)?,
             anonymizer: options.anonymize.then(Anonymizer::new),
             source: None,
+            plugin_themes,
         })
+    }
+
+    /// The theme to render a mode with: the plugin's own theme when the
+    /// config sets colors for it, otherwise `theme`. A detected mode, written
+    /// `auto:NAME`, uses the theme of the plugin detected.
+    pub fn theme_for(&self, mode: &str) -> &Theme {
+        let name = detect::detected_mode(mode).unwrap_or(mode);
+
+        self.plugin_themes.get(name).unwrap_or(&self.theme)
     }
 }
 

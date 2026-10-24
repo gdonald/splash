@@ -451,3 +451,213 @@ fn versions_name_each_registered_plugin_with_its_version() {
 
     assert_eq!(plugins.versions(), ["set-versioned 3.1.4"]);
 }
+
+const SYSLOG_LINE: &str = "Oct  3 12:00:01 web01 cron[5101]: job finished";
+
+fn requiring(name: &str, requires: &str) -> String {
+    format!(
+        "name = \"{}\"\nrequires = \"{}\"\n[patterns]\nall = '^(?P<level>[A-Z]+)$'\n",
+        name, requires
+    )
+}
+
+#[test]
+fn requirements_name_plugins_with_an_optional_version() {
+    let requires = plugin(&requiring("needs", "syslog, orders 1.2.0"))
+        .requires()
+        .to_vec();
+
+    assert_eq!(
+        requires,
+        [
+            external::Requirement {
+                name: "syslog".to_string(),
+                version: None
+            },
+            external::Requirement {
+                name: "orders".to_string(),
+                version: Some(PluginVersion::new(1, 2, 0))
+            }
+        ]
+    );
+}
+
+#[test]
+fn a_requirement_with_a_version_that_is_not_three_numbers_is_an_error() {
+    let found = error(&requiring("needs", "syslog 1.0"));
+
+    assert_eq!(found, PluginError::BadRequirement("syslog 1.0".to_string()));
+    assert_eq!(
+        found.to_string(),
+        "invalid requirement 'syslog 1.0' (expected NAME or NAME MAJOR.MINOR.PATCH)"
+    );
+}
+
+#[test]
+fn a_requirement_of_more_than_a_name_and_a_version_is_an_error() {
+    assert_eq!(
+        error(&requiring("needs", "syslog 1.0.0 later")),
+        PluginError::BadRequirement("syslog 1.0.0 later".to_string())
+    );
+}
+
+#[test]
+fn a_resolved_plugin_reads_lines_its_patterns_miss_with_the_plugins_it_requires() {
+    let needs = plugin(&requiring("needs-syslog", "syslog 1.0.0"))
+        .resolve(registry::builtins())
+        .unwrap();
+
+    assert_eq!(
+        kinds(&needs, "INFO"),
+        [(TokenKind::Level, "INFO".to_string())]
+    );
+    assert_eq!(kinds(&needs, SYSLOG_LINE)[0].0, TokenKind::Timestamp);
+    assert_eq!(needs.dependencies()[0].name(), "syslog");
+}
+
+#[test]
+fn a_plugin_reads_no_line_with_its_requirements_before_it_is_resolved() {
+    let needs = plugin(&requiring("needs-syslog", "syslog"));
+
+    assert!(matches!(
+        needs.parse_line(SYSLOG_LINE),
+        ParseResult::NoMatch
+    ));
+}
+
+#[test]
+fn a_resolved_plugin_does_not_read_a_line_no_plugin_reads() {
+    let needs = plugin(&requiring("needs-syslog", "syslog"))
+        .resolve(registry::builtins())
+        .unwrap();
+
+    assert!(matches!(
+        needs.parse_line("no format"),
+        ParseResult::NoMatch
+    ));
+}
+
+#[test]
+fn a_required_plugin_that_is_not_loaded_is_an_error() {
+    let found = plugin(&requiring("needs", "not-loaded"))
+        .resolve(registry::builtins())
+        .unwrap_err();
+
+    assert_eq!(
+        found.to_string(),
+        "requires plugin 'not-loaded', which is not loaded"
+    );
+}
+
+#[test]
+fn a_required_plugin_of_an_incompatible_version_is_an_error() {
+    let found = plugin(&requiring("needs", "syslog 2.0.0"))
+        .resolve(registry::builtins())
+        .unwrap_err();
+
+    assert_eq!(
+        found,
+        PluginError::IncompatibleDependency {
+            name: "syslog".to_string(),
+            required: PluginVersion::new(2, 0, 0),
+            found: PluginVersion::new(1, 0, 0)
+        }
+    );
+    assert_eq!(
+        found.to_string(),
+        "requires plugin 'syslog' 2.0.0, but version 1.0.0 is loaded"
+    );
+}
+
+#[test]
+fn a_plugin_file_is_registered_after_the_plugin_file_it_requires() {
+    let directory = TempDir::new().unwrap();
+    let dependent = directory.path().join("a.toml");
+    fs::write(&dependent, requiring("dep-orders", "dep-base 1.0.0")).unwrap();
+    let base = plugin_file(
+        directory.path(),
+        "b.toml",
+        "dep-base",
+        "^(?P<message>base .+)$",
+    );
+    let mut plugins = PluginSet::new();
+
+    let failures = plugins.load(&[dependent, base]);
+
+    assert!(failures.is_empty(), "{:?}", failures);
+    assert_eq!(
+        reads("dep-orders", "base line"),
+        Some(vec![TokenKind::Message])
+    );
+}
+
+#[test]
+fn plugin_files_that_require_each_other_are_reported() {
+    let directory = TempDir::new().unwrap();
+    let first = directory.path().join("a.toml");
+    let second = directory.path().join("b.toml");
+    fs::write(&first, requiring("dep-cycle-a", "dep-cycle-b")).unwrap();
+    fs::write(&second, requiring("dep-cycle-b", "dep-cycle-a")).unwrap();
+    let mut plugins = PluginSet::new();
+
+    let failures = plugins.load(&[first.clone(), second.clone()]);
+
+    assert_eq!(
+        failures,
+        [first, second].map(|path| format!(
+            "Cannot load plugin {}: its requirements form a cycle among dep-cycle-a, dep-cycle-b",
+            path.display()
+        ))
+    );
+    assert!(!registry::builtins().contains("dep-cycle-a"));
+}
+
+#[test]
+fn a_plugin_file_that_requires_a_missing_plugin_is_reported() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("a.toml");
+    fs::write(&path, requiring("dep-missing", "not-loaded")).unwrap();
+    let mut plugins = PluginSet::new();
+
+    let failures = plugins.load(std::slice::from_ref(&path));
+
+    assert_eq!(
+        failures,
+        [format!(
+            "Cannot load plugin {}: requires plugin 'not-loaded', which is not loaded",
+            path.display()
+        )]
+    );
+}
+
+#[test]
+fn the_report_names_the_required_plugin_that_read_a_line() {
+    let needs = plugin(&requiring("needs-syslog", "syslog"))
+        .resolve(registry::builtins())
+        .unwrap();
+
+    let report = external::test_patterns(&needs, &format!("INFO\n{}\n", SYSLOG_LINE));
+
+    assert_eq!(
+        report.text,
+        "1: all\n   level            INFO\n2: read by required plugin syslog\n2 of 2 lines matched\n"
+    );
+    assert_eq!(report.unmatched, 0);
+}
+
+#[test]
+fn a_plugin_debug_view_shows_its_metadata_patterns_and_requirements() {
+    let shown = format!("{:?}", plugin(&requiring("needs", "syslog")));
+
+    assert!(shown.starts_with("TomlPlugin { metadata: "), "{}", shown);
+    assert!(
+        shown.contains("patterns: [Pattern { name: \"all\""),
+        "{}",
+        shown
+    );
+    assert!(
+        shown.ends_with("requires: [Requirement { name: \"syslog\", version: None }] }"),
+        "{}",
+        shown
+    );
+}

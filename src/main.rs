@@ -196,13 +196,13 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     test_regex: Option<String>,
 
-    /// Use a specific plugin by name
-    #[arg(long)]
+    /// Read the input with this plugin, as --mode does
+    #[arg(long, value_name = "NAME", conflicts_with = "mode")]
     plugin: Option<String>,
 
-    /// Disable a specific plugin by name
-    #[arg(long)]
-    disable_plugin: Option<String>,
+    /// Leave a plugin out of auto detection and refuse its mode (repeatable)
+    #[arg(long, value_name = "NAME")]
+    disable_plugin: Vec<String>,
 
     /// Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
     #[arg(long, value_name = "LEVELS")]
@@ -287,10 +287,6 @@ fn main() {
         Err(e) => fail(&e.to_string()),
     };
 
-    if let Some(file) = args.test_regex.as_deref() {
-        std::process::exit(test_regex(file, &args.path));
-    }
-
     let mut discovery = PluginDiscovery::new();
 
     for directory in &args.plugin_dir {
@@ -301,6 +297,12 @@ fn main() {
 
     for failure in plugins.load(&discovery.discover_plugins().unwrap_or_default()) {
         eprintln!("{}", failure);
+    }
+
+    disable_plugins(&config, &args.disable_plugin);
+
+    if let Some(file) = args.test_regex.as_deref() {
+        std::process::exit(test_regex(file, &args.path));
     }
 
     let profiles = Profiles::default_profiles();
@@ -323,7 +325,7 @@ fn main() {
         return;
     }
 
-    let mode = match (args.auto, args.mode, args.syslog.is_some()) {
+    let mode = match (args.auto, args.mode.or(args.plugin), args.syslog.is_some()) {
         (true, _, _) => Some(detect::AUTO.to_string()),
         (false, Some(mode), _) => Some(mode),
         (false, None, true) => Some(syslog::NAME.to_string()),
@@ -381,15 +383,8 @@ fn main() {
         return;
     }
 
-    if let Some(plugin_name) = args.disable_plugin {
-        println!("Disabling plugin: {}", plugin_name);
-        println!("Note: Plugin disable functionality will be available in a future version");
-        return;
-    }
-
-    if let Some(plugin_name) = args.plugin {
-        println!("Using plugin: {}", plugin_name);
-        println!("Note: Specific plugin selection will be available in a future version");
+    if registry::builtins().is_disabled(&settings.mode) {
+        fail(&format!("Plugin '{}' is disabled", settings.mode));
     }
 
     let input = match (args.syslog.as_deref(), args.listen.as_deref()) {
@@ -566,8 +561,23 @@ fn watch_plugins(discovery: PluginDiscovery, plugins: PluginSet) -> RecommendedW
 
 /// Reports which of a plugin file's patterns read each line of stdin or of
 /// the `--path` files, returning the exit status: 1 when a line was not read
+/// Disables the plugins the config turns off, and those named by
+/// `--disable-plugin`, which must be loaded
+fn disable_plugins(config: &Config, names: &[String]) {
+    for name in config.disabled_plugins() {
+        let _ = registry::builtins().disable_plugin(registry::canonical_mode(name));
+    }
+
+    for name in names {
+        if let Err(e) = registry::builtins().disable_plugin(registry::canonical_mode(name)) {
+            fail(&e.to_string());
+        }
+    }
+}
+
 fn test_regex(file: &str, values: &[String]) -> i32 {
     let plugin = TomlPlugin::load(Path::new(file))
+        .and_then(|plugin| plugin.resolve(registry::builtins()))
         .unwrap_or_else(|e| fail(&format!("Cannot load plugin {}: {}", file, e)));
 
     let mut texts = Vec::new();

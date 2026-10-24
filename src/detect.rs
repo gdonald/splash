@@ -44,9 +44,9 @@ pub struct Detection {
     pub confidence: f32,
 }
 
-/// The modes detection considers, in name order
+/// The modes detection considers, in name order, leaving out disabled plugins
 pub fn candidate_modes() -> Vec<String> {
-    let mut modes = registry::builtins().list_plugins().unwrap();
+    let mut modes = registry::builtins().list_enabled_plugins().unwrap();
     modes.push(CLF.to_string());
     modes.sort();
     modes

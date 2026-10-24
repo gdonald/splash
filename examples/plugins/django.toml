@@ -1,0 +1,13 @@
+# A Django application served by Gunicorn, logging with the format
+# [%(asctime)s] %(levelname)s %(name)s: %(message)s into Gunicorn's error log:
+# [2023-10-03 12:05:12,431] ERROR django.request: Internal Server Error: /reports/export
+# Gunicorn's own lines are read by the gunicorn plugin this plugin requires.
+name = "django"
+version = "1.0.0"
+description = "Django application logs in a Gunicorn error log"
+author = "splash"
+requires = "gunicorn 1.0.0"
+
+[patterns]
+request = '^(?P<timestamp>\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\]) (?P<level>[A-Z]+) (?P<module>[\w.]+): (?P<message>[^:]+): (?P<request>/\S*)$'
+entry = '^(?P<timestamp>\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\]) (?P<level>[A-Z]+) (?P<module>[\w.]+): (?P<message>.*)$'

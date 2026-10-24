@@ -1165,35 +1165,175 @@ fn test_a_profile_that_cannot_be_written_exits_non_zero() {
     assert!(stderr.contains("Could not write"), "stderr was: {}", stderr);
 }
 
+fn redis_fields(home: &Path, args: &[&str]) -> std::process::Output {
+    let example = example_path("redis_server.log");
+    let mut all_args = vec![
+        "--output",
+        "jsonl",
+        "--fields",
+        "pid,module",
+        "--path",
+        example.to_str().unwrap(),
+    ];
+    all_args.extend_from_slice(args);
+
+    run_splash_with_home(home, &all_args, "").unwrap()
+}
+
+fn first_line(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[test]
-fn test_disabling_a_plugin_reports_that_it_is_not_yet_supported() {
+fn test_auto_mode_detects_a_plugin_that_is_not_disabled() {
     let home = tempfile::TempDir::new().unwrap();
 
-    let output = run_splash_with_home(home.path(), &["--disable-plugin", "syslog"], "").unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let output = redis_fields(home.path(), &["--auto"]);
 
-    assert!(output.status.success());
-    assert!(
-        stdout.contains("Disabling plugin: syslog\n"),
-        "stdout was: {}",
-        stdout
+    assert_eq!(first_line(&output), r#"{"pid":"1234","module":"C"}"#);
+}
+
+#[test]
+fn test_auto_mode_leaves_out_a_plugin_disabled_on_the_command_line() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_fields(home.path(), &["--auto", "--disable-plugin", "redis"]);
+
+    assert_eq!(first_line(&output), "{}");
+}
+
+#[test]
+fn test_auto_mode_leaves_out_a_plugin_the_config_turns_off() {
+    let home = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        home.path().join(".splashrc"),
+        "[plugins.redis]\nenabled = \"false\"\n",
+    )
+    .unwrap();
+
+    let output = redis_fields(home.path(), &["--auto"]);
+
+    assert_eq!(first_line(&output), "{}");
+}
+
+#[test]
+fn test_the_mode_of_a_disabled_plugin_is_refused() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_fields(
+        home.path(),
+        &["--mode", "redis", "--disable-plugin", "redis"],
+    );
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: Plugin 'redis' is disabled\n"
     );
 }
 
 #[test]
-fn test_choosing_a_plugin_reports_that_it_is_not_yet_supported() {
+fn test_disabling_a_mode_alias_disables_its_mode() {
     let home = tempfile::TempDir::new().unwrap();
 
-    let output = run_splash_with_home(home.path(), &["--plugin", "syslog"], "a line\n").unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(output.status.success());
-    assert!(
-        stdout.contains("Using plugin: syslog\n"),
-        "stdout was: {}",
-        stdout
+    let output = redis_fields(
+        home.path(),
+        &["--mode", "kubernetes", "--disable-plugin", "k8s"],
     );
-    assert!(stdout.contains("a line\n"), "stdout was: {}", stdout);
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: Plugin 'kubernetes' is disabled\n"
+    );
+}
+
+#[test]
+fn test_disabling_a_plugin_that_is_not_loaded_fails() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_fields(home.path(), &["--disable-plugin", "absent"]);
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: Plugin 'absent' not found\n"
+    );
+}
+
+#[test]
+fn test_choosing_a_plugin_reads_the_input_in_its_mode() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_fields(home.path(), &["--plugin", "redis"]);
+
+    assert_eq!(first_line(&output), r#"{"pid":"1234","module":"C"}"#);
+}
+
+#[test]
+fn test_a_plugin_and_a_mode_cannot_both_be_chosen() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_fields(home.path(), &["--plugin", "redis", "--mode", "syslog"]);
+
+    assert!(!output.status.success());
+}
+
+fn redis_with_colors(home: &Path, args: &[&str]) -> String {
+    std::fs::write(home.join(".splashrc"), "[plugins.redis]\npid = \"green\"\n").unwrap();
+
+    let example = example_path("redis_server.log");
+    let output = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(args)
+        .args(["--path", example.to_str().unwrap()])
+        .env("HOME", home)
+        .env("CLICOLOR_FORCE", "1")
+        .output()
+        .unwrap();
+
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn test_a_plugin_mode_renders_with_the_colors_configured_for_the_plugin() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_with_colors(home.path(), &["--mode", "redis"]);
+
+    assert!(
+        output.starts_with("\u{1b}[32m1234\u{1b}[0m"),
+        "{:?}",
+        output
+    );
+}
+
+#[test]
+fn test_a_detected_plugin_renders_with_the_colors_configured_for_the_plugin() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_with_colors(home.path(), &["--auto"]);
+
+    assert!(
+        output.starts_with("\u{1b}[32m1234\u{1b}[0m"),
+        "{:?}",
+        output
+    );
+}
+
+#[test]
+fn test_html_output_styles_a_plugin_mode_with_the_colors_configured_for_it() {
+    let home = tempfile::TempDir::new().unwrap();
+
+    let output = redis_with_colors(home.path(), &["--mode", "redis", "--output", "html"]);
+
+    assert!(
+        output.contains(".splash-pid { color: #00aa00; }"),
+        "{}",
+        output
+    );
 }
 
 // ==================== Performance Tests ====================
@@ -7891,9 +8031,74 @@ fn test_the_uwsgi_example_plugin_reads_uwsgi_logs() {
 }
 
 #[test]
+fn test_the_django_example_plugin_reads_gunicorn_lines_with_the_plugin_it_requires() {
+    let output = plugin_output("django", "django.log");
+
+    assert_eq!(
+        output,
+        concat!(
+            r#"{"level":"INFO","pid":"4100"}"#,
+            "\n",
+            r#"{"level":"INFO","pid":"4101"}"#,
+            "\n",
+            r#"{"level":"INFO","module":"django.utils.autoreload"}"#,
+            "\n",
+            r#"{"level":"ERROR","module":"django.request","request":"/reports/export","failure":"Error"}"#,
+            "\n",
+            r#"{"level":"WARNING","module":"django.security.csrf","request":"/orders/"}"#,
+            "\n",
+            r#"{"level":"CRITICAL","pid":"4100"}"#,
+            "\n"
+        )
+    );
+}
+
+#[test]
+fn test_a_plugin_file_whose_required_plugin_is_missing_is_reported() {
+    let directory = log_directory(&[(
+        "needs.toml",
+        "name = \"needs\"\nrequires = \"absent\"\n[patterns]\nall = '.+'\n",
+    )]);
+
+    let output = run_splash(&[
+        "--plugin-dir",
+        directory.path().to_str().unwrap(),
+        "--list-plugins",
+    ])
+    .unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "Cannot load plugin {}: requires plugin 'absent', which is not loaded\n",
+            directory.path().join("needs.toml").display()
+        )
+    );
+}
+
+#[test]
+fn test_regex_testing_a_plugin_whose_required_plugin_is_missing_fails() {
+    let directory = log_directory(&[(
+        "needs.toml",
+        "name = \"needs\"\nrequires = \"absent\"\n[patterns]\nall = '.+'\n",
+    )]);
+    let plugin = directory.path().join("needs.toml");
+
+    let output = run_splash(&["--test-regex", plugin.to_str().unwrap()]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+        "Cannot load plugin {}: requires plugin 'absent', which is not loaded",
+        plugin.display()
+    )));
+}
+
+#[test]
 fn test_every_example_plugin_reads_every_line_of_its_example_log() {
-    for name in ["gunicorn", "celery", "uwsgi"] {
+    for name in ["gunicorn", "celery", "uwsgi", "django"] {
         let output = run_splash(&[
+            "--plugin-dir",
+            example_plugins().to_str().unwrap(),
             "--test-regex",
             example_plugins()
                 .join(format!("{}.toml", name))
@@ -8356,13 +8561,18 @@ fn test_the_systemd_mode_is_the_journalctl_mode() {
 /// what splash wrote before the pipe closed
 #[cfg(unix)]
 fn followed_pipe_output(mode: &str, example: &str) -> String {
-    let (mut child, stdin, _receiver, output) = stream_stdin_example(
+    let (mut child, stdin, receiver, shown_before_input_ended) = stream_stdin_example(
         &["--mode", mode, "--output", "plain"],
         &example_contents(example),
     );
 
+    assert!(!shown_before_input_ended.is_empty());
+
     drop(stdin);
     child.wait().unwrap();
+
+    let mut output = shown_before_input_ended;
+    output.extend(receiver.iter().flatten());
 
     String::from_utf8_lossy(&output).to_string()
 }

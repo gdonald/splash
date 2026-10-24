@@ -160,8 +160,9 @@ Options:
       --reload-plugins                   Load plugin files again whenever one changes
       --test-regex <FILE>                Report which of a plugin file's patterns read each input
                                          line, and exit
-      --plugin <PLUGIN>                  Use a specific plugin by name
-      --disable-plugin <DISABLE_PLUGIN>  Disable a specific plugin by name
+      --plugin <NAME>                    Read the input with this plugin, as --mode does
+      --disable-plugin <NAME>            Leave a plugin out of auto detection and refuse its mode
+                                         (repeatable)
       --level <LEVELS>                   Keep only lines at these levels, as LEVEL,LEVEL (repeatable)
       --since <TIME>                     Keep only lines written at or after this time, such as 2h
                                          ago or 2024-01-01
@@ -497,7 +498,8 @@ splash --mode orders --path /var/log/orders.log --follow --reload-plugins
 
 `--test-regex` reports which pattern read each line, `--reload-plugins` loads plugin files again
 as they change, and [`examples/plugins/`](examples/plugins/) holds plugins for Gunicorn, Celery,
-and uWSGI. [PLUGINS.md](PLUGINS.md) describes the plugin file format, a guide to writing one, and
+uWSGI, and Django. A plugin file can require other plugins to read the lines its own patterns do
+not. [PLUGINS.md](PLUGINS.md) describes the plugin file format, a guide to writing one, and
 the Rust API of the built-in plugins.
 
 ---
@@ -818,7 +820,7 @@ status = "white bold"
 # Settings for one plugin
 [plugins.syslog]
 enabled = "true"
-facility = "cyan"
+level = "cyan"
 
 # Keyword styling (see Keywords)
 wordcolor = true
@@ -880,8 +882,27 @@ by hand.
 
 ### Per-plugin settings
 
-A `[plugins.NAME]` table holds settings for one plugin. `enabled = "false"` turns a plugin off.
-`--list-plugins` prints each configured plugin and its settings.
+A `[plugins.NAME]` table holds settings for one plugin, built-in or loaded from a plugin file.
+
+`enabled = "false"` turns the plugin off: auto detection leaves it out, and `--mode NAME` fails
+with an error. `--disable-plugin NAME` does the same for one run and can be repeated.
+
+Every other key is a color key, as in `[colors]`, and repaints that kind of token when the input
+is read in the plugin's mode, whether `--mode` names it or auto detection chooses it. These colors
+are applied after the `[colors]` table and before `--color`. HTML output takes its colors from
+the mode `--mode` names, since its style sheet is written before auto detection reads the input.
+
+```toml
+[plugins.redis]
+pid = "green"
+level = "bright red bold"
+
+[plugins.squid]
+enabled = "false"
+```
+
+`--list-plugins` prints each configured plugin and its settings. `--plugin NAME` reads the input
+with that plugin, as `--mode NAME` does.
 
 ---
 
