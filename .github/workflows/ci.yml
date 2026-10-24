@@ -2,12 +2,12 @@ name: CI
 permissions:
   contents: read
 
+# Runs after the home lab's Jenkins build passes and reports the
+# continuous-integration/jenkins/branch commit status. A status event runs
+# this file from the default branch, so each job checks out the commit the
+# status is for.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
+  status
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,11 +15,14 @@ env:
 jobs:
   test:
     name: Test
+    if: github.event.context == 'continuous-integration/jenkins/branch' && github.event.state == 'success'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.sha }}
 
       - name: Install LLVM and Clang
         run: |
@@ -70,11 +73,14 @@ jobs:
 
   coverage:
     name: Code Coverage
+    if: github.event.context == 'continuous-integration/jenkins/branch' && github.event.state == 'success'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.sha }}
 
       - name: Install LLVM and Clang
         run: |
@@ -100,11 +106,14 @@ jobs:
 
   benchmark:
     name: Benchmark
+    if: github.event.context == 'continuous-integration/jenkins/branch' && github.event.state == 'success'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.sha }}
 
       - name: Install LLVM and Clang
         run: |
