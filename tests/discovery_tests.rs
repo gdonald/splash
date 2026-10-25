@@ -208,20 +208,13 @@ fn test_discovery_skips_a_search_path_that_is_a_file() {
     assert_eq!(discovery.discover_plugins().unwrap(), Vec::<PathBuf>::new());
 }
 
-#[cfg(unix)]
 #[test]
-fn test_a_directory_that_cannot_be_read_is_skipped() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn test_a_directory_that_cannot_be_listed_is_skipped() {
     let temp_dir = TempDir::new().unwrap();
-    let locked = temp_dir.path().join("locked");
-    create_dir_all(&locked).unwrap();
-    File::create(locked.join("myapp.toml")).unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let file = temp_dir.path().join("plugins");
+    File::create(&file).unwrap();
 
-    let plugins = PluginDiscovery::with_paths(vec![locked.clone()]).discover_plugins();
-
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plugins = PluginDiscovery::with_paths(vec![file.join("inside")]).discover_plugins();
 
     assert_eq!(plugins.unwrap(), Vec::<PathBuf>::new());
 }

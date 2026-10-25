@@ -106,16 +106,8 @@ impl PluginDiscovery {
         let mut plugin_files = Vec::new();
 
         for search_path in &self.search_paths {
-            if !search_path.exists() {
-                // Skip non-existent paths silently
-                continue;
-            }
-
-            if !search_path.is_dir() {
-                continue;
-            }
-
-            // A directory splash cannot read is skipped like a missing one
+            // A path that is missing, is not a directory, or cannot be read
+            // is skipped
             let Ok(entries) = fs::read_dir(search_path) else {
                 continue;
             };
