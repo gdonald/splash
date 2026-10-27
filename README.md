@@ -109,6 +109,9 @@ tail -f /var/log/nginx/access.log | splash --mode clf
 cat logfile.log | splash
 ```
 
+[MIGRATING.md](MIGRATING.md) translates ccze options, plugins, and `~/.cczerc` colors into
+splash's.
+
 ---
 
 ## Usage
@@ -2051,6 +2054,14 @@ Every parsing mode can be written out in seven formats, selected with `--output`
 ### ansi
 
 ANSI escape sequences for a color terminal. This is the default.
+
+splash writes the escape sequences only when stdout is a terminal, so a pipe or a file receives the
+lines without them. `CLICOLOR_FORCE=1` writes them anywhere, for a pager or a file read later with
+`less -R`:
+
+```bash
+CLICOLOR_FORCE=1 splash --mode syslog --path /var/log/syslog | less -R
+```
 
 Control characters in a log line are written as text the terminal shows rather than obeys, so a
 line cannot move the cursor, clear the screen, or set the window title: escape and the other C0

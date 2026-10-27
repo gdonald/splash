@@ -126,7 +126,8 @@ WantedBy=multi-user.target
 ```
 
 The collecting host listens, labels each line with the address of the host that sent it, and
-appends the colored lines to a file:
+appends the colored lines to a file. splash writes colors only to a terminal unless
+`CLICOLOR_FORCE=1` is set:
 
 ```ini
 # /etc/systemd/system/splash-collect.service
@@ -135,7 +136,8 @@ Description=Collect journal errors forwarded by splash
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/splash --mode journalctl --listen :5170 --label --output ansi
+ExecStart=/usr/local/bin/splash --mode journalctl --listen :5170 --label
+Environment=CLICOLOR_FORCE=1
 DynamicUser=yes
 LogsDirectory=splash
 StandardOutput=append:/var/log/splash/hosts.log
@@ -170,7 +172,8 @@ Description=Receive syslog messages with splash
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/splash --syslog --label --output ansi
+ExecStart=/usr/local/bin/splash --syslog --label
+Environment=CLICOLOR_FORCE=1
 DynamicUser=yes
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 LogsDirectory=splash

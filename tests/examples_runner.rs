@@ -8034,6 +8034,120 @@ fn test_journal_errors_a_host_forwards_are_labeled_by_the_collecting_host() {
     assert_eq!(output, format!("127.0.0.1 {}", journal));
 }
 
+/// splash run on a syslog line with its stdout piped, with these
+/// environment variables set and the color variables otherwise unset
+fn piped_syslog_output(environment: &[(&str, &str)]) -> String {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
+    command
+        .args(["--mode", "syslog"])
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR")
+        .envs(environment.iter().copied())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"Oct  3 12:00:01 web01 sshd[5101]: Accepted password for alice\n")
+        .unwrap();
+
+    String::from_utf8_lossy(&child.wait_with_output().unwrap().stdout).to_string()
+}
+
+#[test]
+fn test_ansi_output_to_a_pipe_holds_no_escape_sequences() {
+    assert_eq!(
+        piped_syslog_output(&[]),
+        "Oct  3 12:00:01 web01 sshd[5101]: Accepted password for alice\n"
+    );
+}
+
+#[test]
+fn test_ansi_output_to_a_pipe_is_colored_when_clicolor_force_is_set() {
+    assert!(piped_syslog_output(&[("CLICOLOR_FORCE", "1")]).starts_with("\x1b["));
+}
+
+#[test]
+fn test_every_ccze_plugin_name_is_a_mode() {
+    for plugin in [
+        "apm",
+        "distcc",
+        "exim",
+        "fetchmail",
+        "ftpstats",
+        "httpd",
+        "icecast",
+        "oops",
+        "php",
+        "postfix",
+        "procmail",
+        "proftpd",
+        "squid",
+        "sulog",
+        "super",
+        "syslog",
+        "ulogd",
+        "vsftpd",
+        "xferlog",
+    ] {
+        let output = run_splash(&["--mode", plugin, "--path", "/dev/null"]).unwrap();
+
+        assert!(output.status.success(), "{}", plugin);
+    }
+}
+
+#[test]
+fn test_a_config_translated_from_a_cczerc_colors_the_same_fields() {
+    let home = tempfile::TempDir::new().unwrap();
+    let config = home.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[colors]\n\
+         timestamp = \"cyan\"\n\
+         host = \"blue bold\"\n\
+         ip = \"blue bold\"\n\
+         failure = \"red bold\"\n\
+         userid = \"yellow bold\"\n",
+    )
+    .unwrap();
+
+    let output = run_splash_with_home(
+        home.path(),
+        &[
+            "--mode",
+            "syslog",
+            "--output",
+            "html",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        "Oct  3 12:00:01 web01 sshd[5101]: error: connect from 203.0.113.50\n",
+    )
+    .unwrap();
+    let page = String::from_utf8_lossy(&output.stdout);
+
+    for rule in [
+        ".splash-timestamp { color: #00aaaa; }",
+        ".splash-host { color: #0000aa; font-weight: bold; }",
+        ".splash-ip { color: #0000aa; font-weight: bold; }",
+        ".splash-failure { color: #aa0000; font-weight: bold; }",
+        ".splash-userid { color: #aa5500; font-weight: bold; }",
+    ] {
+        assert!(page.contains(rule), "{}", rule);
+    }
+}
+
+#[test]
+fn test_a_cczerc_style_with_a_background_color_is_refused() {
+    let output = run_splash(&["--color", "host=blue on_white", "--path", "/dev/null"]).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown color 'blue on white'"));
+}
+
 // ==================== Plugin File Tests ====================
 
 fn example_plugins() -> PathBuf {

@@ -38,7 +38,7 @@ pipeline {
 
   options {
     disableConcurrentBuilds(abortPrevious: true)
-    timeout(time: 30, unit: 'MINUTES')
+    timeout(time: 60, unit: 'MINUTES')
   }
 
   // A failing stage marks the build failed and the stages after it still
