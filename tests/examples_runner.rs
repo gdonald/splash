@@ -7969,6 +7969,71 @@ fn test_a_labeled_file_starts_each_line_with_its_name() {
     assert_eq!(output, "app.log alpha\napp.log beta\n");
 }
 
+// ==================== Integration Tests ====================
+
+#[test]
+fn test_a_nodes_container_logs_are_merged_in_time_order_labeled_with_their_pods() {
+    let directory = log_directory(&[
+        (
+            "web-7d9c_default_nginx-3f2a.log",
+            "2023-10-03T12:00:01.000000000Z stdout F GET /health 200\n\
+             2023-10-03T12:00:04.000000000Z stdout F GET /orders 200\n",
+        ),
+        (
+            "api-5b8f_default_api-9c1e.log",
+            "2023-10-03T12:00:02.000000000Z stderr F timeout calling db\n",
+        ),
+    ]);
+    let pattern = directory.path().join("*.log");
+
+    let output = run_splash_file_args(&[
+        "--mode",
+        "k8s",
+        "--merge",
+        "--label",
+        "--output",
+        "plain",
+        "--path",
+        pattern.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        "web-7d9c_default_nginx-3f2a.log 2023-10-03T12:00:01.000000000Z stdout F GET /health 200\n\
+         api-5b8f_default_api-9c1e.log 2023-10-03T12:00:02.000000000Z stderr F timeout calling db\n\
+         web-7d9c_default_nginx-3f2a.log 2023-10-03T12:00:04.000000000Z stdout F GET /orders 200\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_journal_errors_a_host_forwards_are_labeled_by_the_collecting_host() {
+    let mut collecting =
+        Listening::start(&["--mode", "journalctl", "--output", "plain", "--label"]);
+    let url = format!("tcp://{}", collecting.address);
+    let journal = "2023-10-03T12:00:04+0000 web01 systemd[1]: app.service: Main process exited, code=exited, status=1/FAILURE\n";
+
+    let shown = run_splash_with_stdin_args(
+        &[
+            "--mode",
+            "journalctl",
+            "--output",
+            "plain",
+            "--forward",
+            &url,
+        ],
+        journal,
+    )
+    .unwrap();
+    collecting.collect();
+    let (success, output) = collecting.interrupt();
+
+    assert_eq!(shown, journal);
+    assert!(success);
+    assert_eq!(output, format!("127.0.0.1 {}", journal));
+}
+
 // ==================== Plugin File Tests ====================
 
 fn example_plugins() -> PathBuf {

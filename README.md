@@ -380,6 +380,9 @@ browsers with `--websocket`. `--label` also labels `--syslog` messages with the 
 them, and the lines of a `--path` file with its file name. It does not label stdin, and the curses
 viewer shows lines unlabeled.
 
+[INTEGRATIONS.md](INTEGRATIONS.md) runs the forwarding and collecting hosts as systemd units, and
+shows how to read Docker and Kubernetes logs.
+
 ---
 
 ## Receiving syslog messages
