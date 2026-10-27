@@ -96,6 +96,9 @@ splash --mode syslog --listen :8080
 # Receive syslog messages from other hosts over UDP and TCP
 splash --syslog :5514
 
+# Read a CloudWatch Logs log group, and keep reading the events written to it
+splash --mode ad-hoc --cloudwatch /ecs/web --since "1h ago" --follow
+
 # Also send the output to browsers over WebSocket
 splash --mode syslog --path /var/log/syslog --follow --output json --websocket :8081
 
@@ -125,17 +128,20 @@ Options:
       --auto                             Detect the log format from the first lines of the input
   -p, --path <PATH>...                   Paths to the log files, or - to read stdin. A file name may
                                          hold * and ?
-  -f, --follow                           Keep reading the --path files as they grow, as tail -f does
+  -f, --follow                           Keep reading the --path files or the --cloudwatch log group
+                                         as they grow, as tail -f does
       --merge                            Interleave the lines of several --path files in time order,
                                          labeled with their file
-      --label                            Start each line with where it came from: its file, or the
-                                         address that sent it
+      --label                            Start each line with where it came from: its file, the
+                                         address that sent it, or its log stream
   -r, --recursive                        Read the files in the subdirectories of a --path directory
                                          too
       --listen <ADDRESS>                 Receive log lines over TCP or HTTP on this address, such as
                                          :8080 or 127.0.0.1:8080
       --syslog [<ADDRESS>]               Receive syslog messages over UDP and TCP on this address
                                          (default :514)
+      --cloudwatch <GROUP>               Read the events of this CloudWatch Logs log group, with the
+                                         AWS CLI's region and credentials
       --websocket <ADDRESS>              Also send each line of output to WebSocket clients on this
                                          address, such as :8081
       --forward <URL>                    Also send each line of output to tcp://HOST:PORT,
@@ -403,6 +409,44 @@ where `@` sends over UDP and `@@` over TCP. Messages are rendered in syslog mode
 RFC 3164 and RFC 5424 messages and their `<PRI>` priorities, unless `--mode` or `--auto` names
 another. `--syslog` cannot be combined with `--path` or `--listen`, and the curses viewer shows
 messages as they are received.
+
+## Reading CloudWatch Logs
+
+`--cloudwatch GROUP` reads the events of a CloudWatch Logs log group through the AWS SDK. The SDK
+finds the region and credentials as the AWS CLI does: from `AWS_REGION`, `AWS_PROFILE`,
+`AWS_ACCESS_KEY_ID`, and the other `AWS_*` environment variables, from `~/.aws/config` and
+`~/.aws/credentials`, and from the EC2 instance or ECS task splash runs on. The credentials need
+the `logs:FilterLogEvents` permission on the group.
+
+```bash
+AWS_PROFILE=production splash --mode ad-hoc --cloudwatch /ecs/web --label
+```
+
+```
+web/web/3f9a1c2e 2026-10-27T14:00:01Z INFO GET /health 200 3ms
+web/web/8b7d0e41 2026-10-27T14:00:02Z INFO GET /orders 200 41ms
+```
+
+Each line of an event's message is rendered on its own, and `--label` starts it with the log
+stream the event was written to. Without `--since` and `--until`, splash reads every event the
+group holds and exits. `--since` and `--until` are sent with the request, so CloudWatch returns
+only the events in that range, and the lines are then filtered by their own timestamps as usual.
+
+`--follow` keeps reading: once the events written so far are read, splash asks every 2 seconds
+for the events written since the last one it rendered, until Ctrl-C or `kill` stops it.
+
+```bash
+splash --auto --cloudwatch /aws/lambda/checkout --since "10m ago" --follow
+```
+
+A request that fails ends splash with the reason CloudWatch gave:
+
+```
+Error: Cannot read CloudWatch log group /ecs/api: The specified log group does not exist.
+```
+
+`--cloudwatch` cannot be combined with `--path`, `--listen`, or `--syslog`. `AWS_ENDPOINT_URL`
+points the SDK at another endpoint, such as LocalStack.
 
 ---
 
@@ -850,6 +894,8 @@ enabled = true
 
 Command line options win over the config file. Colors are layered: the theme or profile first,
 then the file's `[colors]` table, then any `--color` overrides.
+
+[COLORS.md](COLORS.md) walks through building a color scheme from these settings.
 
 ### Themes
 
@@ -2285,6 +2331,7 @@ of each change can be compared by hand.
 - Stdin streaming
 - Lines received over TCP and HTTP with `--listen`
 - Syslog messages received over UDP and TCP with `--syslog`
+- CloudWatch Logs log groups read, and followed, with `--cloudwatch`
 - Rate limiting of input lines with `--rate-limit`
 - Masking addresses and user names with `--anonymize`
 - Forwarding output over TCP, UDP, or HTTP with `--forward`

@@ -1,10 +1,11 @@
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use crossterm::event;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute, terminal};
 use notify::{Config as WatchConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use splash::cloudwatch::{self, Connection, Query};
 use splash::config::{Config, Options, Profiles, Settings};
 use splash::dates::DateOptions;
 use splash::detect;
@@ -82,10 +83,12 @@ enum Input<'a> {
     },
     Network(&'a str),
     Syslog(&'a str),
+    CloudWatch(Query),
 }
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+#[command(group(ArgGroup::new("followed").args(["path", "cloudwatch"]).multiple(true)))]
 struct Args {
     /// Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf, cloud-init, cron, distcc, dmesg,
     /// docker, dovecot, elasticsearch, exim, fetchmail, ftpstats, git, haproxy, httpd, icecast,
@@ -103,15 +106,15 @@ struct Args {
     #[arg(short, long, num_args = 1..)]
     path: Vec<String>,
 
-    /// Keep reading the --path files as they grow, as tail -f does
-    #[arg(short, long, requires = "path")]
+    /// Keep reading the --path files or the --cloudwatch log group as they grow, as tail -f does
+    #[arg(short, long, requires = "followed")]
     follow: bool,
 
     /// Interleave the lines of several --path files in time order, labeled with their file
     #[arg(long, requires = "path")]
     merge: bool,
 
-    /// Start each line with where it came from: its file, or the address that sent it
+    /// Start each line with where it came from: its file, the address that sent it, or its log stream
     #[arg(long)]
     label: bool,
 
@@ -127,6 +130,10 @@ struct Args {
     #[arg(long, value_name = "ADDRESS", num_args = 0..=1,
           default_missing_value = listen::SYSLOG_ADDRESS, conflicts_with_all = ["path", "listen"])]
     syslog: Option<String>,
+
+    /// Read the events of this CloudWatch Logs log group, with the AWS CLI's region and credentials
+    #[arg(long, value_name = "GROUP", conflicts_with_all = ["path", "listen", "syslog"])]
+    cloudwatch: Option<String>,
 
     /// Also send each line of output to WebSocket clients on this address, such as :8081
     #[arg(long, value_name = "ADDRESS")]
@@ -397,9 +404,18 @@ fn main() {
         fail(&format!("Plugin '{}' is disabled", settings.mode));
     }
 
-    let input = match (args.syslog.as_deref(), args.listen.as_deref()) {
-        (Some(address), _) => Input::Syslog(address),
-        (None, Some(address)) => Input::Network(address),
+    let input = match (
+        args.cloudwatch.as_deref(),
+        args.syslog.as_deref(),
+        args.listen.as_deref(),
+    ) {
+        (Some(group), _, _) => Input::CloudWatch(
+            Query::new(group)
+                .within(settings.filter.time.as_ref())
+                .following(args.follow),
+        ),
+        (None, Some(address), _) => Input::Syslog(address),
+        (None, None, Some(address)) => Input::Network(address),
         _ if args.path.is_empty() || args.path == [STDIN_PATH] => Input::Stdin,
         _ => match expand_paths(&args.path, args.recursive) {
             Ok(sources) => Input::Files {
@@ -483,18 +499,25 @@ fn run(input: &Input, settings: &Settings, label: bool) {
                 fail(&format!("{:?}", e));
             }
         }
-        Input::Network(address) => {
-            if let Err(e) =
-                listen_on(address).and_then(|lines| render_received(lines, label, settings))
-            {
-                fail(&e.to_string());
-            }
-        }
-        Input::Syslog(address) => {
-            if let Err(e) =
-                receive_syslog_on(address).and_then(|lines| render_received(lines, label, settings))
-            {
-                fail(&e.to_string());
+        Input::Network(address) => match listen_on(address) {
+            Ok(lines) => render_received(lines, label, settings),
+            Err(e) => fail(&e.to_string()),
+        },
+        Input::Syslog(address) => match receive_syslog_on(address) {
+            Ok(lines) => render_received(lines, label, settings),
+            Err(e) => fail(&e.to_string()),
+        },
+        Input::CloudWatch(ref query) => {
+            let (lines, reader) = cloudwatch::start(Connection::Environment, query.clone());
+
+            render_received(lines, label, settings);
+
+            // After an interrupt the reader can still be waiting to ask for
+            // newer events, and joining it would wait with no end
+            let interrupted = INTERRUPTED.load(Ordering::SeqCst);
+
+            if let Some(Err(e)) = (!interrupted).then(|| reader.join().unwrap()) {
+                fail(&e);
             }
         }
         Input::Stdin => {
@@ -866,14 +889,11 @@ fn render_paths(
     Ok(())
 }
 
-/// Renders the lines received over the network until splash is
-/// interrupted. Lines that arrive together are rendered together, and in
-/// auto mode the first of them decide the mode.
-fn render_received(
-    lines: mpsc::Receiver<Received>,
-    label: bool,
-    settings: &Settings,
-) -> io::Result<()> {
+/// Renders the lines received over the network or from CloudWatch until
+/// splash is interrupted or the lines stop arriving. Lines that arrive
+/// together are rendered together, and in auto mode the first of them decide
+/// the mode.
+fn render_received(lines: mpsc::Receiver<Received>, label: bool, settings: &Settings) {
     let mut settings = settings.clone();
     let mut entry = Entry::default();
     let mut stats = Stats::default();
@@ -883,8 +903,10 @@ fn render_received(
     emit(&opening(&settings));
 
     while !INTERRUPTED.load(Ordering::SeqCst) {
-        let Ok(first) = lines.recv_timeout(INTERRUPT_POLL) else {
-            continue;
+        let first = match lines.recv_timeout(INTERRUPT_POLL) {
+            Ok(first) => first,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
 
         let arrived: Vec<Received> = std::iter::once(first).chain(lines.try_iter()).collect();
@@ -909,8 +931,6 @@ fn render_received(
     }
 
     emit_closing(&settings, &stats);
-
-    Ok(())
 }
 
 /// Starts listening on `address`, and names the address bound on stderr,
@@ -1062,6 +1082,10 @@ fn view(input: &Input, settings: &Settings) -> io::Result<()> {
         Input::Syslog(address) => {
             Tail::stream(lines_of(receive_syslog_on(address)?), settings.clone())
         }
+        Input::CloudWatch(ref query) => Tail::stream(
+            lines_of(cloudwatch::start(Connection::Environment, query.clone()).0),
+            settings.clone(),
+        ),
         Input::Stdin if io::stdin().is_terminal() => {
             return Err(io::Error::other(tui::NEEDS_INPUT))
         }

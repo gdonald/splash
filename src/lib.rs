@@ -6,6 +6,7 @@ pub mod bench;
 pub mod caddy;
 pub mod ci;
 pub mod cloud_init;
+pub mod cloudwatch;
 pub mod color;
 pub mod config;
 pub mod container;

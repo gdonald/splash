@@ -7,6 +7,7 @@ formats splash ships with are plugins written in Rust, compiled into splash.
 - [Plugin files](#plugin-files): the TOML plugin format
 - [Writing a plugin](#writing-a-plugin): a plugin file from sample lines to daily use
 - [Built-in plugins](#built-in-plugins): the Rust plugin API
+- [Plugin reference](#plugin-reference): each built-in plugin and the fields it reads
 
 ---
 
@@ -268,3 +269,373 @@ and `container::push_output` colors a line in whatever format reads it.
    section.
 4. Add sample logs to `tests/examples/`, parsing tests to `tests/NAME_tests.rs`, and tests that
    run splash on the samples to `tests/examples_runner.rs`. Tests never go in `src/`.
+5. Add the plugin's samples to `SUITES` in `tests/plugin_suites_tests.rs`, and its entry to the
+   plugin reference below.
+
+---
+
+## Plugin reference
+
+Each built-in plugin is named by `--mode` or `--plugin`, and listed by `--list-plugins`. Its
+samples are the files in `tests/examples/` written wholly in its format, which the tests read. The
+fields are the names of the token kinds the plugin gives to parts of its samples' lines. A field
+name is what `--filter KEY=VALUE`, `--fields`, `--color KEY=COLOR`, a theme, and a JSON or HTML
+output use for that kind. Every line also has the `plain` and `punctuation` kinds for the text
+between fields. A plugin can produce fields its samples do not hold, so this list is the least it
+reads.
+
+### apache-error
+
+Apache error logs.
+
+Samples: [apache_error.log](tests/examples/apache_error.log)
+
+Fields: `failure`, `header`, `ip`, `level`, `message`, `module`, `number`, `path`, `pid`, `tag`, `timestamp`, `transaction`, `warning`
+
+### apm
+
+apmd Advanced Power Management logs.
+
+Samples: [apm_apmd.log](tests/examples/apm_apmd.log)
+
+Fields: `duration`, `failure`, `host`, `message`, `number`, `pid`, `size`, `success`, `tag`, `timestamp`, `warning`
+
+### auth
+
+Authentication logs from sshd, sudo, su, and PAM.
+
+Samples: [auth_security.log](tests/examples/auth_security.log), [auth_sshd.log](tests/examples/auth_sshd.log), [auth_sudo.log](tests/examples/auth_sudo.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `message`, `module`, `number`, `path`, `pid`, `request`, `success`, `tag`, `timestamp`, `userid`, `warning`
+
+### caddy
+
+Caddy structured JSON logs.
+
+Samples: [caddy_access.log](tests/examples/caddy_access.log), [caddy_error.log](tests/examples/caddy_error.log)
+
+Fields: `duration`, `header`, `host`, `ip`, `level`, `message`, `method`, `number`, `protocol`, `request`, `size`, `status`, `tag`, `timestamp`, `userid`
+
+### ci
+
+Jenkins and GitHub Actions build logs.
+
+Samples: [ci_github.log](tests/examples/ci_github.log), [ci_jenkins.log](tests/examples/ci_jenkins.log), [ci_jenkins_server.log](tests/examples/ci_jenkins_server.log)
+
+Fields: `failure`, `header`, `level`, `message`, `module`, `path`, `pid`, `request`, `success`, `tag`, `timestamp`, `warning`
+
+### cloud-init
+
+cloud-init instance initialization logs.
+
+Samples: [cloud_init.log](tests/examples/cloud_init.log), [cloud_init_output.log](tests/examples/cloud_init_output.log)
+
+Fields: `duration`, `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `number`, `path`, `pid`, `success`, `tag`, `timestamp`, `warning`
+
+### cron
+
+cron and anacron job logs.
+
+Samples: [cron_file.log](tests/examples/cron_file.log), [cron_syslog.log](tests/examples/cron_syslog.log)
+
+Fields: `failure`, `header`, `host`, `message`, `method`, `module`, `number`, `pid`, `request`, `success`, `tag`, `timestamp`, `userid`, `warning`
+
+### distcc
+
+distccd distributed compilation logs.
+
+Samples: [distcc_logfile.log](tests/examples/distcc_logfile.log)
+
+Fields: `duration`, `failure`, `header`, `ip`, `message`, `module`, `number`, `pid`, `success`, `tag`
+
+### dmesg
+
+Kernel ring buffer messages from dmesg.
+
+Samples: [dmesg_decoded.log](tests/examples/dmesg_decoded.log), [dmesg_default.log](tests/examples/dmesg_default.log)
+
+Fields: `failure`, `host`, `level`, `message`, `module`, `success`, `tag`, `timestamp`, `warning`
+
+### docker
+
+Docker container and daemon logs.
+
+Samples: [compose_stack.log](tests/examples/compose_stack.log), [docker_daemon.log](tests/examples/docker_daemon.log), [docker_json.log](tests/examples/docker_json.log), [docker_timestamps.log](tests/examples/docker_timestamps.log)
+
+Fields: `client`, `failure`, `header`, `host`, `ip`, `level`, `message`, `method`, `module`, `pid`, `protocol`, `referer`, `request`, `size`, `status`, `success`, `tag`, `timestamp`, `transaction`, `user_agent`, `user_identifier`, `userid`, `warning`
+
+### dovecot
+
+Dovecot IMAP, POP3, and LMTP logs.
+
+Samples: [dovecot_file.log](tests/examples/dovecot_file.log), [dovecot_syslog.log](tests/examples/dovecot_syslog.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `pid`, `protocol`, `size`, `success`, `tag`, `timestamp`, `transaction`, `userid`
+
+### elasticsearch
+
+Elasticsearch server and slow logs.
+
+Samples: [elasticsearch_json.log](tests/examples/elasticsearch_json.log), [elasticsearch_server.log](tests/examples/elasticsearch_server.log)
+
+Fields: `duration`, `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `number`, `request`, `tag`, `timestamp`, `transaction`, `warning`
+
+### exim
+
+Exim mail routing and delivery logs.
+
+Samples: [exim_mainlog.log](tests/examples/exim_mainlog.log)
+
+Fields: `email`, `failure`, `header`, `host`, `ip`, `message`, `module`, `pid`, `protocol`, `queue_id`, `size`, `success`, `timestamp`, `transaction`, `warning`
+
+### fetchmail
+
+Fetchmail email retrieval logs.
+
+Samples: [fetchmail_file.log](tests/examples/fetchmail_file.log), [fetchmail_syslog.log](tests/examples/fetchmail_syslog.log)
+
+Fields: `email`, `failure`, `header`, `host`, `message`, `number`, `pid`, `size`, `success`, `tag`, `timestamp`, `userid`, `warning`
+
+### ftpstats
+
+pure-ftpd ftpstats transfer logs.
+
+Samples: [ftpstats_transfers.log](tests/examples/ftpstats_transfers.log)
+
+Fields: `duration`, `host`, `ip`, `method`, `path`, `size`, `timestamp`, `transaction`, `userid`
+
+### git
+
+git daemon and Git trace logs.
+
+Samples: [git_daemon.log](tests/examples/git_daemon.log), [git_trace.log](tests/examples/git_trace.log)
+
+Fields: `failure`, `host`, `ip`, `message`, `method`, `module`, `number`, `path`, `pid`, `request`, `success`, `tag`, `timestamp`, `warning`
+
+### haproxy
+
+HAProxy connection and error logs.
+
+Samples: [haproxy_error.log](tests/examples/haproxy_error.log), [haproxy_http.log](tests/examples/haproxy_http.log), [haproxy_tcp.log](tests/examples/haproxy_tcp.log)
+
+Fields: `backend`, `client`, `counters`, `frontend`, `header`, `host`, `ip`, `message`, `method`, `pid`, `protocol`, `request`, `server`, `size`, `status`, `tag`, `termination`, `timers`, `timestamp`
+
+### httpd
+
+Apache and nginx access and error logs.
+
+Samples: [httpd_apache_error.log](tests/examples/httpd_apache_error.log), [httpd_combined.log](tests/examples/httpd_combined.log), [httpd_extended.log](tests/examples/httpd_extended.log), [httpd_nginx_error.log](tests/examples/httpd_nginx_error.log), [httpd_vhost_combined.log](tests/examples/httpd_vhost_combined.log), [nginx_production.log](tests/examples/nginx_production.log), [real_apache.log](tests/examples/real_apache.log)
+
+Fields: `client`, `duration`, `ip`, `level`, `message`, `method`, `module`, `pid`, `protocol`, `referer`, `request`, `size`, `status`, `timestamp`, `user_agent`, `user_identifier`, `userid`, `vhost`
+
+### icecast
+
+Icecast streaming server logs.
+
+Samples: [icecast_access.log](tests/examples/icecast_access.log), [icecast_error.log](tests/examples/icecast_error.log), [icecast_v1.log](tests/examples/icecast_v1.log)
+
+Fields: `client`, `duration`, `failure`, `header`, `ip`, `level`, `message`, `method`, `module`, `number`, `protocol`, `referer`, `request`, `size`, `status`, `success`, `tag`, `timestamp`, `user_agent`, `user_identifier`, `userid`, `warning`
+
+### journalctl
+
+systemd journal output from journalctl.
+
+Also named `systemd`.
+
+Samples: [journalctl_follow.log](tests/examples/journalctl_follow.log), [journalctl_precise.log](tests/examples/journalctl_precise.log), [journalctl_short.log](tests/examples/journalctl_short.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `message`, `module`, `pid`, `success`, `tag`, `timestamp`, `transaction`, `warning`
+
+### kubernetes
+
+Kubernetes component and container logs.
+
+Also named `k8s`.
+
+Samples: [k8s_cluster.log](tests/examples/k8s_cluster.log), [kubernetes_cri.log](tests/examples/kubernetes_cri.log), [kubernetes_klog.log](tests/examples/kubernetes_klog.log)
+
+Fields: `client`, `failure`, `header`, `host`, `level`, `message`, `method`, `module`, `number`, `path`, `pid`, `protocol`, `referer`, `request`, `size`, `status`, `tag`, `timestamp`, `transaction`, `user_agent`, `user_identifier`, `userid`, `warning`
+
+### mongodb
+
+MongoDB structured and text logs.
+
+Samples: [mongodb_json.log](tests/examples/mongodb_json.log), [mongodb_text.log](tests/examples/mongodb_text.log)
+
+Fields: `duration`, `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `number`, `tag`, `timestamp`, `transaction`, `userid`, `warning`
+
+### mysql
+
+MySQL and MariaDB error and slow query logs.
+
+Samples: [mysql_error.log](tests/examples/mysql_error.log), [mysql_slow.log](tests/examples/mysql_slow.log), [mysql_slow_production.log](tests/examples/mysql_slow_production.log)
+
+Fields: `duration`, `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `number`, `pid`, `request`, `success`, `timestamp`, `transaction`, `userid`, `warning`
+
+### nginx-error
+
+nginx error logs.
+
+Samples: [nginx_error.log](tests/examples/nginx_error.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `number`, `path`, `pid`, `referer`, `request`, `timestamp`, `transaction`, `vhost`, `warning`
+
+### oops
+
+Linux kernel oops, warning, and panic messages.
+
+Samples: [oops_kernel.log](tests/examples/oops_kernel.log)
+
+Fields: `failure`, `header`, `message`, `module`, `number`, `tag`, `timestamp`
+
+### php
+
+PHP error logs and PHP-FPM logs.
+
+Samples: [php_error.log](tests/examples/php_error.log), [php_fpm.log](tests/examples/php_fpm.log)
+
+Fields: `failure`, `header`, `level`, `message`, `module`, `number`, `path`, `pid`, `success`, `tag`, `timestamp`, `warning`
+
+### postfix
+
+Postfix mail queue, SMTP, and delivery logs.
+
+Samples: [postfix_delivery.log](tests/examples/postfix_delivery.log), [postfix_failures.log](tests/examples/postfix_failures.log)
+
+Fields: `duration`, `email`, `failure`, `header`, `host`, `ip`, `message`, `number`, `pid`, `protocol`, `queue_id`, `size`, `status`, `success`, `tag`, `timers`, `timestamp`, `transaction`, `warning`
+
+### postgresql
+
+PostgreSQL server logs and slow statements.
+
+Samples: [postgresql_debian.log](tests/examples/postgresql_debian.log), [postgresql_default.log](tests/examples/postgresql_default.log), [postgresql_slow.log](tests/examples/postgresql_slow.log)
+
+Fields: `duration`, `failure`, `header`, `ip`, `level`, `message`, `module`, `pid`, `request`, `timestamp`, `userid`, `warning`
+
+### procmail
+
+Procmail mail filtering and delivery logs.
+
+Samples: [procmail_abstract.log](tests/examples/procmail_abstract.log), [procmail_verbose.log](tests/examples/procmail_verbose.log)
+
+Fields: `email`, `failure`, `header`, `message`, `path`, `pid`, `size`, `success`, `tag`, `timestamp`, `warning`
+
+### proftpd
+
+ProFTPD system and extended logs.
+
+Samples: [proftpd_extended.log](tests/examples/proftpd_extended.log), [proftpd_syslog.log](tests/examples/proftpd_syslog.log), [proftpd_system.log](tests/examples/proftpd_system.log)
+
+Fields: `failure`, `host`, `ip`, `message`, `method`, `pid`, `request`, `size`, `status`, `success`, `tag`, `timestamp`, `user_identifier`, `userid`, `vhost`
+
+### pure-ftpd
+
+pure-ftpd syslog and transfer logs.
+
+Samples: [pureftpd_altlog.log](tests/examples/pureftpd_altlog.log), [pureftpd_syslog.log](tests/examples/pureftpd_syslog.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `level`, `message`, `method`, `number`, `path`, `request`, `size`, `status`, `success`, `tag`, `timestamp`, `user_identifier`, `userid`, `warning`
+
+### redis
+
+Redis server logs.
+
+Samples: [redis_server.log](tests/examples/redis_server.log)
+
+Fields: `ip`, `level`, `message`, `module`, `pid`, `success`, `timestamp`, `warning`
+
+### squid
+
+Squid access logs, native and httpd-emulated.
+
+Samples: [squid_emulated.log](tests/examples/squid_emulated.log), [squid_native.log](tests/examples/squid_native.log)
+
+Fields: `cache_hit`, `cache_miss`, `cache_result`, `client`, `content_type`, `duration`, `hierarchy`, `method`, `protocol`, `request`, `size`, `status`, `timestamp`, `user_identifier`, `userid`
+
+### ssh
+
+OpenSSH server logs.
+
+Samples: [ssh_sshd.log](tests/examples/ssh_sshd.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `message`, `module`, `number`, `pid`, `protocol`, `success`, `tag`, `timestamp`, `transaction`, `userid`, `warning`
+
+### sudo
+
+sudo and su privilege escalation logs.
+
+Samples: [sudo_logfile.log](tests/examples/sudo_logfile.log), [sudo_syslog.log](tests/examples/sudo_syslog.log)
+
+Fields: `failure`, `header`, `host`, `message`, `module`, `number`, `path`, `pid`, `request`, `success`, `tag`, `timestamp`, `userid`
+
+### sulog
+
+System V su command logs.
+
+Samples: [sulog_solaris.log](tests/examples/sulog_solaris.log)
+
+Fields: `failure`, `path`, `success`, `tag`, `timestamp`, `userid`
+
+### super
+
+super(1) superuser access logs.
+
+Samples: [super_logfile.log](tests/examples/super_logfile.log)
+
+Fields: `host`, `message`, `method`, `pid`, `request`, `tag`, `timestamp`, `userid`
+
+### syslog
+
+Syslog lines from any program, including RFC 5424.
+
+Samples: [multi_service_syslog.log](tests/examples/multi_service_syslog.log), [real_syslog.log](tests/examples/real_syslog.log), [syslog_rfc5424.log](tests/examples/syslog_rfc5424.log), [syslog_traditional.log](tests/examples/syslog_traditional.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `level`, `message`, `module`, `number`, `pid`, `tag`, `timestamp`, `transaction`, `warning`
+
+### systemd-resolved
+
+systemd-resolved DNS resolution logs.
+
+Samples: [resolved_journal.log](tests/examples/resolved_journal.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `message`, `pid`, `protocol`, `success`, `tag`, `timestamp`, `warning`
+
+### terraform
+
+Terraform logs, JSON output, and CLI output.
+
+Samples: [terraform_cli.log](tests/examples/terraform_cli.log), [terraform_log.log](tests/examples/terraform_log.log)
+
+Fields: `duration`, `failure`, `header`, `level`, `message`, `method`, `module`, `number`, `success`, `tag`, `timestamp`, `transaction`, `warning`
+
+### ulogd
+
+Netfilter packet logs from ulogd and the kernel.
+
+Samples: [ulogd_kernel.log](tests/examples/ulogd_kernel.log), [ulogd_logemu.log](tests/examples/ulogd_logemu.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `message`, `module`, `number`, `protocol`, `size`, `success`, `tag`, `timestamp`, `userid`
+
+### varnish
+
+Varnish request and response logs.
+
+Samples: [varnish_raw.log](tests/examples/varnish_raw.log), [varnish_transaction.log](tests/examples/varnish_transaction.log)
+
+Fields: `header`, `ip`, `message`, `method`, `number`, `protocol`, `request`, `status`, `tag`, `timestamp`, `transaction`
+
+### vsftpd
+
+vsftpd FTP server logs.
+
+Samples: [vsftpd_file.log](tests/examples/vsftpd_file.log), [vsftpd_syslog.log](tests/examples/vsftpd_syslog.log)
+
+Fields: `failure`, `header`, `host`, `ip`, `message`, `method`, `number`, `path`, `pid`, `request`, `size`, `status`, `success`, `tag`, `timestamp`, `user_identifier`, `userid`
+
+### xferlog
+
+Generic xferlog FTP transfer logs.
+
+Samples: [xferlog_transfers.log](tests/examples/xferlog_transfers.log)
+
+Fields: `duration`, `failure`, `host`, `ip`, `level`, `method`, `module`, `number`, `path`, `protocol`, `size`, `success`, `tag`, `timestamp`, `user_identifier`, `userid`

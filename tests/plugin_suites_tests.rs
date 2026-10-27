@@ -1,5 +1,6 @@
 use splash::output::TokenKind;
-use splash::registry;
+use splash::registry::{self, MODE_ALIASES};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -292,4 +293,54 @@ fn each_plugin_reads_the_first_line_of_its_first_sample_as_recorded() {
 
         assert_eq!(annotated(first, name), *expected, "{} in {}", name, file);
     }
+}
+
+/// The entry for a plugin in the plugin reference of PLUGINS.md: its
+/// description, aliases, samples, and the fields its samples hold
+fn reference_entry(name: &str, files: &[&str]) -> String {
+    let plugin = registry::builtins().get(name).unwrap();
+    let mut entry = format!("### {}\n\n{}.\n\n", name, plugin.metadata().description);
+
+    for (alias, _) in MODE_ALIASES.iter().filter(|(_, plugin)| *plugin == name) {
+        entry.push_str(&format!("Also named `{}`.\n\n", alias));
+    }
+
+    let samples: Vec<String> = files
+        .iter()
+        .map(|file| format!("[{}](tests/examples/{})", file, file))
+        .collect();
+
+    entry.push_str(&format!("Samples: {}\n\n", samples.join(", ")));
+
+    let mut fields = BTreeSet::new();
+
+    for file in files {
+        for line in lines(&sample(file)) {
+            for token in splash::parser::parse_line(line, name).unwrap().tokens {
+                if !matches!(token.kind, TokenKind::Plain | TokenKind::Punctuation) {
+                    fields.insert(token.kind.name());
+                }
+            }
+        }
+    }
+
+    let fields: Vec<String> = fields.iter().map(|field| format!("`{}`", field)).collect();
+
+    entry.push_str(&format!("Fields: {}\n", fields.join(", ")));
+    entry
+}
+
+#[test]
+fn the_plugin_reference_describes_every_built_in_plugin_and_the_fields_it_reads() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("PLUGINS.md");
+    let guide = fs::read_to_string(path).unwrap();
+    let reference = guide.split("\n## Plugin reference\n").nth(1).unwrap();
+    let entries = &reference[reference.find("### ").unwrap()..];
+
+    let expected: Vec<String> = SUITES
+        .iter()
+        .map(|(name, files)| reference_entry(name, files))
+        .collect();
+
+    assert_eq!(entries, expected.join("\n"));
 }

@@ -1,0 +1,5 @@
+{"events":[
+  {"logStreamName":"web/web/3f9a1c2e","timestamp":1793109601000,"message":"2026-10-27T14:00:01Z INFO GET /health 200 3ms\n","ingestionTime":1793109601120,"eventId":"38712391029311"},
+  {"logStreamName":"web/web/8b7d0e41","timestamp":1793109602000,"message":"2026-10-27T14:00:02Z INFO GET /orders 200 41ms\n","ingestionTime":1793109602090,"eventId":"38712391029312"},
+  {"logStreamName":"web/web/3f9a1c2e","timestamp":1793109603000,"message":"2026-10-27T14:00:03Z ERROR POST /orders 500 timeout calling 10.0.4.17:5432\nretrying in 2s\n","ingestionTime":1793109603210,"eventId":"38712391029313"}
+],"searchedLogStreams":[]}

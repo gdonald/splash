@@ -8908,6 +8908,15 @@ impl TerminalRun {
     /// Starts splash in a 24 by 120 terminal, with standard input from a
     /// pipe holding `piped` when it is given
     fn start(args: &[&str], piped: Option<&str>) -> TerminalRun {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
+        command.args(args);
+
+        TerminalRun::run(command, piped)
+    }
+
+    /// Starts `command` in a 24 by 120 terminal, with standard input from a
+    /// pipe holding `piped` when it is given
+    fn run(mut command: Command, piped: Option<&str>) -> TerminalRun {
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
 
@@ -8934,8 +8943,7 @@ impl TerminalRun {
         let secondary_handle = unsafe { OwnedFd::from_raw_fd(secondary) };
         let keep_stdin = piped.is_some();
 
-        let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
-        command.args(args).stdin(if keep_stdin {
+        command.stdin(if keep_stdin {
             std::process::Stdio::piped()
         } else {
             std::process::Stdio::null()
@@ -9581,4 +9589,193 @@ fn test_lines_from_several_clients_sending_at_once_are_all_rendered_in_each_clie
 
         assert_eq!(received, sent);
     }
+}
+
+// ==================== CloudWatch Logs Tests ====================
+
+#[path = "support/fake_cloudwatch.rs"]
+mod fake_cloudwatch;
+
+use fake_cloudwatch::FakeCloudWatch;
+
+/// Splash reading `group` from the fake endpoint, with no AWS settings of
+/// the machine's own
+fn cloudwatch_command(server: &FakeCloudWatch, group: &str, args: &[&str]) -> Command {
+    let missing = std::env::temp_dir().join("splash-no-aws-config");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
+
+    command
+        .args(["--cloudwatch", group])
+        .args(args)
+        .env("AWS_ENDPOINT_URL", &server.endpoint)
+        .env("AWS_REGION", "us-east-1")
+        .env("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+        .env("AWS_SECRET_ACCESS_KEY", "secret")
+        .env("AWS_CONFIG_FILE", &missing)
+        .env("AWS_SHARED_CREDENTIALS_FILE", &missing)
+        .env("AWS_EC2_METADATA_DISABLED", "true")
+        .env("AWS_MAX_ATTEMPTS", "1")
+        .env_remove("AWS_PROFILE");
+
+    command
+}
+
+#[test]
+fn test_cloudwatch_events_are_rendered_labeled_with_their_log_stream() {
+    let server = FakeCloudWatch::start(&[&example_contents("cloudwatch_events.json")]);
+
+    let output = cloudwatch_command(
+        &server,
+        "app-logs",
+        &["--mode", "ad-hoc", "--output", "plain", "--label"],
+    )
+    .output()
+    .unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "web/web/3f9a1c2e 2026-10-27T14:00:01Z INFO GET /health 200 3ms\n\
+         web/web/8b7d0e41 2026-10-27T14:00:02Z INFO GET /orders 200 41ms\n\
+         web/web/3f9a1c2e 2026-10-27T14:00:03Z ERROR POST /orders 500 timeout calling 10.0.4.17:5432\n\
+         web/web/3f9a1c2e retrying in 2s\n"
+    );
+}
+
+#[test]
+fn test_cloudwatch_reads_only_the_time_range_since_and_until_keep() {
+    let server = FakeCloudWatch::start(&[]);
+
+    cloudwatch_command(
+        &server,
+        "app-logs",
+        &[
+            "--mode",
+            "ad-hoc",
+            "--since",
+            "2026-10-27T14:00:00Z",
+            "--until",
+            "2026-10-27T15:00:00Z",
+        ],
+    )
+    .output()
+    .unwrap();
+
+    assert_eq!(
+        server.requests(),
+        vec![r#"{"logGroupName":"app-logs","startTime":1793109600000,"endTime":1793113200000}"#]
+    );
+}
+
+#[test]
+fn test_a_cloudwatch_group_that_cannot_be_read_is_an_error() {
+    let server = FakeCloudWatch::answering(vec![(
+        400,
+        r#"{"__type":"ResourceNotFoundException","message":"The specified log group does not exist."}"#
+            .to_string(),
+    )]);
+
+    let output = cloudwatch_command(&server, "missing-logs", &["--mode", "ad-hoc"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        (output.status.success(), String::from_utf8_lossy(&output.stderr)),
+        (
+            false,
+            "Error: Cannot read CloudWatch log group missing-logs: The specified log group does not exist.\n"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn test_cloudwatch_cannot_be_combined_with_a_path() {
+    let output = run_splash(&["--cloudwatch", "app-logs", "--path", "app.log"]).unwrap();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_followed_cloudwatch_group_is_read_until_splash_is_interrupted() {
+    let server = FakeCloudWatch::start(&[&example_contents("cloudwatch_events.json")]);
+    let mut child = cloudwatch_command(
+        &server,
+        "app-logs",
+        &[
+            "--mode",
+            "ad-hoc",
+            "--output",
+            "plain",
+            "--follow",
+            "--summary",
+        ],
+    )
+    .stdout(std::process::Stdio::piped())
+    .spawn()
+    .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+
+        while let Ok(count) = stdout.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut written = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE).unwrap();
+
+    while let Ok(chunk) = receiver.recv_timeout(OUTPUT_QUIET_PERIOD) {
+        written.extend(chunk);
+    }
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    let success = child.wait().unwrap().success();
+
+    while let Ok(chunk) = receiver.recv_timeout(FIRST_OUTPUT_DEADLINE) {
+        written.extend(chunk);
+    }
+
+    let written = String::from_utf8_lossy(&written);
+
+    let before_time_range = written.split("From:").next().unwrap();
+
+    assert_eq!(
+        (success, before_time_range),
+        (
+            true,
+            "2026-10-27T14:00:01Z INFO GET /health 200 3ms\n\
+             2026-10-27T14:00:02Z INFO GET /orders 200 41ms\n\
+             2026-10-27T14:00:03Z ERROR POST /orders 500 timeout calling 10.0.4.17:5432\n\
+             retrying in 2s\n\
+             Summary\n\
+             =======\n\
+             Lines:       4\n\
+             Errors:      1\n\
+             Error rate:  25.0%\n"
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_shows_the_events_of_a_cloudwatch_group() {
+    let server = FakeCloudWatch::start(&[&example_contents("cloudwatch_events.json")]);
+    let mut command = cloudwatch_command(&server, "app-logs", &["--mode", "ad-hoc"]);
+    command.args(["--output", "curses"]);
+
+    let mut run = TerminalRun::run(command, None);
+
+    run.wait_for("lines 1-4 of 4");
+    run.type_keys("q");
+
+    assert!(run.finish());
 }
