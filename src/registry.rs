@@ -63,7 +63,12 @@ pub enum RegistryError {
 impl std::fmt::Display for RegistryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RegistryError::PluginNotFound(name) => write!(f, "Plugin '{}' not found", name),
+            RegistryError::PluginNotFound(name) => write!(
+                f,
+                "Plugin '{}' not found{}",
+                name,
+                crate::suggest::hint(name, mode_names().iter().map(String::as_str))
+            ),
             RegistryError::PluginAlreadyRegistered(name) => {
                 write!(f, "Plugin '{}' is already registered", name)
             }
@@ -469,6 +474,27 @@ pub fn canonical_mode(mode: &str) -> &str {
 /// The names of the plugins splash is built with
 static BUILTIN_NAMES: LazyLock<Vec<String>> =
     LazyLock::new(|| PluginRegistry::with_builtins().list_plugins().unwrap());
+
+/// Every mode `--mode` accepts without a plugin file, in name order
+pub fn mode_names() -> Vec<String> {
+    let mut names: Vec<String> = BUILTIN_NAMES
+        .iter()
+        .cloned()
+        .chain(
+            [
+                crate::detect::CLF,
+                crate::detect::AUTO,
+                crate::config::DEFAULT_MODE,
+            ]
+            .map(str::to_string),
+        )
+        .chain(MODE_ALIASES.iter().map(|(alias, _)| alias.to_string()))
+        .collect();
+
+    names.sort();
+    names.dedup();
+    names
+}
 
 /// Whether a mode name belongs to splash itself: a built-in plugin, one of
 /// the modes with no plugin, or an alias

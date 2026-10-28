@@ -1,4 +1,4 @@
-use splash::source::{self, Follower, LogFile, MMAP_THRESHOLD};
+use splash::source::{self, Encoding, Follower, LogFile, UnknownEncoding, MMAP_THRESHOLD};
 use std::fs;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
@@ -504,5 +504,217 @@ fn the_chunks_join_back_into_the_text() {
     assert_eq!(
         splash::source::line_chunks(&text, 4096).collect::<String>(),
         text
+    );
+}
+
+/// The chunks a file is read in, and the bytes after its last line break
+/// with the number of bytes read
+fn chunks_of(bytes: &[u8], size: usize) -> (Vec<String>, Vec<u8>, u64) {
+    let directory = TempDir::new().unwrap();
+    let path = write(directory.path(), "app.log", bytes);
+    let mut chunks = Vec::new();
+
+    let (rest, read) = source::read_chunks(&path, size, Encoding::Utf8, |chunk| {
+        chunks.push(chunk.to_string())
+    })
+    .unwrap();
+
+    (chunks, rest, read)
+}
+
+#[test]
+fn a_file_is_read_in_chunks_of_whole_lines() {
+    assert_eq!(
+        chunks_of(b"one\ntwo\nthree\nfour", 8),
+        (
+            vec!["one\ntwo\n".to_string(), "three\n".to_string()],
+            b"four".to_vec(),
+            18
+        )
+    );
+}
+
+#[test]
+fn a_file_smaller_than_a_chunk_is_left_whole_for_the_caller() {
+    assert_eq!(
+        chunks_of(b"one\ntwo\n", 64),
+        (Vec::<String>::new(), b"one\ntwo\n".to_vec(), 8)
+    );
+}
+
+#[test]
+fn a_line_longer_than_a_chunk_is_read_whole() {
+    assert_eq!(
+        chunks_of(b"a long line\nend", 4),
+        (vec!["a long line\n".to_string()], b"end".to_vec(), 15)
+    );
+}
+
+#[test]
+fn invalid_bytes_in_a_chunk_are_replaced() {
+    assert_eq!(
+        chunks_of(b"caf\xe9\nok\n", 4).0,
+        vec!["caf\u{fffd}\nok\n".to_string()]
+    );
+}
+
+#[test]
+fn reading_a_missing_file_in_chunks_reports_it() {
+    let directory = TempDir::new().unwrap();
+
+    let missing = directory.path().join("missing.log");
+
+    assert!(source::read_chunks(&missing, 8, Encoding::Utf8, |_| {}).is_err());
+}
+
+#[test]
+fn encodings_are_named_in_any_case_with_or_without_hyphens() {
+    assert_eq!(
+        [
+            "utf-8",
+            "UTF8",
+            "latin1",
+            "Latin-1",
+            "ISO-8859-1",
+            "iso_8859_1"
+        ]
+        .map(|name| Encoding::parse(name).unwrap()),
+        [
+            Encoding::Utf8,
+            Encoding::Utf8,
+            Encoding::Latin1,
+            Encoding::Latin1,
+            Encoding::Latin1,
+            Encoding::Latin1
+        ]
+    );
+}
+
+#[test]
+fn an_unknown_encoding_is_refused() {
+    let error = Encoding::parse("ebcdic").unwrap_err();
+
+    assert_eq!(
+        (error.clone(), error.to_string()),
+        (
+            UnknownEncoding("ebcdic".to_string()),
+            "Unknown encoding 'ebcdic' (expected utf-8 or latin1)".to_string()
+        )
+    );
+}
+
+#[test]
+fn the_locale_names_the_encoding_from_lc_all_then_lc_ctype_then_lang() {
+    assert_eq!(
+        [
+            Encoding::from_locale(Some("de_DE.ISO-8859-1"), Some("en_US.UTF-8"), None),
+            Encoding::from_locale(None, Some("de_DE.ISO-8859-1"), Some("en_US.UTF-8")),
+            Encoding::from_locale(Some(""), None, Some("fr_FR.ISO8859-1@euro")),
+            Encoding::from_locale(None, None, Some("en_US.UTF-8")),
+            Encoding::from_locale(None, None, Some("C")),
+            Encoding::from_locale(None, None, Some("ja_JP.EUC-JP")),
+            Encoding::from_locale(None, None, None),
+        ],
+        [
+            Encoding::Latin1,
+            Encoding::Latin1,
+            Encoding::Latin1,
+            Encoding::Utf8,
+            Encoding::Utf8,
+            Encoding::Utf8,
+            Encoding::Utf8
+        ]
+    );
+}
+
+#[test]
+fn latin1_reads_one_character_per_byte() {
+    assert_eq!(
+        (
+            Encoding::Latin1.decode(b"caf\xe9"),
+            Encoding::Latin1.decode(b"plain"),
+            Encoding::Utf8.decode(b"caf\xe9"),
+        ),
+        (
+            std::borrow::Cow::Owned::<str>("café".to_string()),
+            std::borrow::Cow::Borrowed("plain"),
+            std::borrow::Cow::Owned::<str>("caf\u{fffd}".to_string()),
+        )
+    );
+}
+
+#[test]
+fn latin1_writes_a_character_it_has_no_byte_for_as_a_question_mark() {
+    assert_eq!(
+        (
+            Encoding::Latin1.encode("café ▁ 日"),
+            Encoding::Latin1.encode("plain"),
+            Encoding::Utf8.encode("é"),
+        ),
+        (
+            std::borrow::Cow::Owned::<[u8]>(b"caf\xe9 ? ?".to_vec()),
+            std::borrow::Cow::Borrowed(&b"plain"[..]),
+            std::borrow::Cow::Borrowed("é".as_bytes()),
+        )
+    );
+}
+
+#[test]
+fn a_latin1_file_is_decoded_whatever_its_size() {
+    let directory = TempDir::new().unwrap();
+    let small = write(directory.path(), "small.log", b"caf\xe9\n");
+    let mut large_bytes = large_text().into_bytes();
+    large_bytes.extend_from_slice(b"caf\xe9\n");
+    let large = write(directory.path(), "large.log", &large_bytes);
+    let ascii = write(directory.path(), "ascii.log", large_text().as_bytes());
+
+    let small_log = LogFile::open_with(&small, Encoding::Latin1).unwrap();
+    let large_log = LogFile::open_with(&large, Encoding::Latin1).unwrap();
+    let ascii_log = LogFile::open_with(&ascii, Encoding::Latin1).unwrap();
+
+    assert_eq!(
+        (
+            small_log.text(),
+            large_log.text().ends_with("café\n"),
+            large_log.is_mapped(),
+            ascii_log.is_mapped()
+        ),
+        ("café\n", true, false, true)
+    );
+}
+
+#[test]
+fn a_utf8_file_read_as_latin1_is_read_one_character_per_byte() {
+    let directory = TempDir::new().unwrap();
+    let path = write(directory.path(), "app.log", "café\n".as_bytes());
+
+    assert_eq!(
+        LogFile::open_with(&path, Encoding::Latin1).unwrap().text(),
+        "cafÃ©\n"
+    );
+}
+
+#[test]
+fn chunks_are_decoded_in_the_encoding_given() {
+    let directory = TempDir::new().unwrap();
+    let path = write(directory.path(), "app.log", b"caf\xe9\nok\n");
+    let mut chunks = Vec::new();
+
+    source::read_chunks(&path, 4, Encoding::Latin1, |chunk| {
+        chunks.push(chunk.to_string())
+    })
+    .unwrap();
+
+    assert_eq!(chunks, ["café\nok\n"]);
+}
+
+#[test]
+fn the_encodings_chosen_for_a_run_are_kept() {
+    source::set_encoding(Encoding::Utf8);
+    source::set_output_encoding(Encoding::Utf8);
+
+    assert_eq!(
+        (source::encoding(), source::output_encoding()),
+        (Encoding::Utf8, Encoding::Utf8)
     );
 }

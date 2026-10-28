@@ -131,6 +131,40 @@ fn rendering_a_file_in_chunks_holds_as_much_memory_whatever_its_size() {
 }
 
 #[test]
+fn rendering_a_file_read_in_chunks_holds_as_much_memory_whatever_its_size() {
+    let _measuring = MEASURING.lock().unwrap();
+    let settings = ansi_settings();
+    let directory = tempfile::TempDir::new().unwrap();
+    let three_megabytes = directory.path().join("three.log");
+    let ten_megabytes = directory.path().join("ten.log");
+
+    std::fs::write(&three_megabytes, sample_log(30_000)).unwrap();
+    std::fs::write(&ten_megabytes, sample_log(120_000)).unwrap();
+
+    let render = |path: &std::path::Path| {
+        let mut entry = Entry::default();
+        let mut stats = Stats::default();
+
+        let encoding = splash::source::Encoding::Utf8;
+
+        splash::source::read_chunks(path, splash::source::CHUNK_BYTES, encoding, |chunk| {
+            splash::render_contents_counted(chunk, &settings, &mut entry, &mut stats);
+        })
+        .unwrap();
+    };
+
+    let smaller = peak_during(|| render(&three_megabytes));
+    let larger = peak_during(|| render(&ten_megabytes));
+
+    assert!(larger < smaller * 2, "{} then {}", smaller, larger);
+    assert!(
+        larger < 8 * splash::source::CHUNK_BYTES,
+        "{} bytes held at once",
+        larger
+    );
+}
+
+#[test]
 fn rendering_a_line_in_ansi_makes_no_more_allocations_than_its_ceiling() {
     let _measuring = MEASURING.lock().unwrap();
     let settings = ansi_settings();

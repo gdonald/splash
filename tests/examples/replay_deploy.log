@@ -1,0 +1,5 @@
+2024-03-05T10:15:01.000Z INFO deploy started
+2024-03-05T10:15:01.500Z INFO pulling image web:1.4.2
+2024-03-05T10:15:03.000Z INFO image pulled
+  layers: 7
+2024-03-05T10:15:02.000Z WARN registry slow

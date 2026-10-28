@@ -71,6 +71,8 @@ Start from the theme closest to the scheme you want. `--list-themes` prints them
 | `light` | Darker colors for a light terminal or a printed page |
 | `solarized` | The Solarized Dark palette, as hex colors |
 | `dracula` | The Dracula palette, as hex colors |
+| `colorblind` | The Okabe-Ito palette, which stays apart for protanopia, deuteranopia, and tritanopia, with success sky blue and failure vermillion |
+| `high-contrast` | Light colors on black, each at least 7:1 against the background by the WCAG contrast ratio |
 
 Try each one on a log you read often:
 

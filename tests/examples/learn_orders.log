@@ -1,0 +1,5 @@
+2024-03-05 10:15:01,120 INFO [checkout] order 1001 placed by ana@example.com from 10.0.0.12 in 120ms
+2024-03-05 10:15:02,048 WARN [checkout] order 1002 retried after a timeout from 10.0.0.14 in 3.5s
+2024-03-05 10:15:04,511 ERROR [checkout] payment declined for order 1003
+worker-2 GET /orders/1004 HTTP/1.1 200
+worker-3 POST /orders HTTP/1.1 201

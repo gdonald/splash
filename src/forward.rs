@@ -173,18 +173,20 @@ impl Connection {
 
                 Ok(())
             }
-            Destination::Http { address, path } => post(address, path, text),
+            Destination::Http { address, path } => {
+                post(address, path, "text/plain; charset=utf-8", text)
+            }
         }
     }
 }
 
 /// Posts `body` and fails unless the response status is 2xx
-fn post(address: &str, path: &str, body: &str) -> io::Result<()> {
+pub fn post(address: &str, path: &str, content_type: &str, body: &str) -> io::Result<()> {
     let mut stream = TcpStream::connect(address)?;
 
     write!(
         stream,
-        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )?;
 

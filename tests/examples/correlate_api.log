@@ -1,0 +1,4 @@
+2024-03-05T10:15:01Z INFO request_id=r-1001 GET /orders/7 accepted
+2024-03-05T10:15:02Z INFO request_id=r-1002 POST /orders accepted
+2024-03-05T10:15:05Z ERROR request_id=r-1001 GET /orders/7 failed after 3000ms
+2024-03-05T10:15:06Z INFO health check passed

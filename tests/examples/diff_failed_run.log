@@ -1,0 +1,8 @@
+2024-03-06T08:00:01Z INFO deploy 7c9e6679-7425-40de-944b-e07fc1f90ae7 started
+2024-03-06T08:00:02Z INFO pulling image web:1.4.3
+2024-03-06T08:00:11Z INFO image pulled
+2024-03-06T08:00:12Z INFO migrating database
+2024-03-06T08:00:16Z INFO migrations applied
+2024-03-06T08:00:17Z INFO starting 3 replicas
+2024-03-06T08:00:47Z ERROR replica 2 failed its health check
+2024-03-06T08:00:48Z ERROR deploy rolled back

@@ -116,98 +116,236 @@ splash's.
 
 ## Usage
 
+`splash -h` lists the options most runs use: the mode, the input, following, the output format,
+the theme, and the filters. `splash --help` lists every option under a heading for what it does:
+
 ```
 Usage: splash [OPTIONS]
 
 Options:
-  -m, --mode <MODE>                      Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf,
-                                         cloud-init, cron, distcc, dmesg, docker, dovecot,
-                                         elasticsearch, exim, fetchmail, ftpstats, git, haproxy,
-                                         httpd, icecast, journalctl (or systemd), kubernetes (or
-                                         k8s), mongodb, mysql, nginx-error, oops, php, postfix,
-                                         postgresql, procmail, proftpd, pure-ftpd, redis, squid, ssh,
-                                         sudo, sulog, super, syslog, systemd-resolved, terraform,
-                                         ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
-      --auto                             Detect the log format from the first lines of the input
-  -p, --path <PATH>...                   Paths to the log files, or - to read stdin. A file name may
-                                         hold * and ?
-  -f, --follow                           Keep reading the --path files or the --cloudwatch log group
-                                         as they grow, as tail -f does
-      --merge                            Interleave the lines of several --path files in time order,
-                                         labeled with their file
-      --label                            Start each line with where it came from: its file, the
-                                         address that sent it, or its log stream
-  -r, --recursive                        Read the files in the subdirectories of a --path directory
-                                         too
-      --listen <ADDRESS>                 Receive log lines over TCP or HTTP on this address, such as
-                                         :8080 or 127.0.0.1:8080
-      --syslog [<ADDRESS>]               Receive syslog messages over UDP and TCP on this address
-                                         (default :514)
-      --cloudwatch <GROUP>               Read the events of this CloudWatch Logs log group, with the
-                                         AWS CLI's region and credentials
-      --websocket <ADDRESS>              Also send each line of output to WebSocket clients on this
-                                         address, such as :8081
-      --forward <URL>                    Also send each line of output to tcp://HOST:PORT,
-                                         udp://HOST:PORT, or http://HOST:PORT/PATH
-      --rate-limit <LINES>               Keep at most this many input lines each second, dropping the
-                                         rest
-  -o, --output <OUTPUT>                  Output format (ansi, csv, curses, html, json, jsonl, plain)
-      --fields <FIELDS>                  Fields csv and jsonl output write, as FIELD,FIELD
-                                         (repeatable)
-      --css <FILE>                       A style sheet to add to HTML output after the theme's rules
-      --line-numbers                     Start each line of HTML output with its line number in the
-                                         input
-  -j, --jobs <JOBS>                      Worker threads used to render a file (default: one per
-                                         core)
-      --config <CONFIG>                  Config file to read instead of ~/.splash/config.toml or
-                                         ~/.splashrc
-      --theme <THEME>                    Color theme (dark, light, solarized, dracula)
-      --color <KEY=COLOR>                Override one token color, as KEY=COLOR (repeatable)
-      --profile <PROFILE>                Load a saved color profile
-      --save-profile <NAME>              Save the resolved colors as a profile and exit
-      --list-profiles                    List saved color profiles
-      --list-themes                      List available color themes
-      --list-plugins                     List all available plugins
-      --plugin-dir <DIR>                 Also load plugin files from this directory (repeatable)
-      --reload-plugins                   Load plugin files again whenever one changes
-      --test-regex <FILE>                Report which of a plugin file's patterns read each input
-                                         line, and exit
-      --plugin <NAME>                    Read the input with this plugin, as --mode does
-      --disable-plugin <NAME>            Leave a plugin out of auto detection and refuse its mode
-                                         (repeatable)
-      --level <LEVELS>                   Keep only lines at these levels, as LEVEL,LEVEL, or drop a
-                                         level written !LEVEL (repeatable)
-      --since <TIME>                     Keep only lines written at or after this time, such as 2h
-                                         ago or 2024-01-01
-      --until <TIME>                     Keep only lines written at or before this time
-      --grep <PATTERN>                   Keep only lines matching this pattern, and highlight the
-                                         match (repeatable)
-      --exclude <PATTERN>                Drop lines matching this pattern (repeatable)
-      --filter <KEY=VALUE>               Keep only lines holding a field with this value, as
-                                         KEY=VALUE, or not, as KEY!=VALUE (repeatable)
-      --anonymize                        Mask IP addresses, email addresses, and user names
-      --convert-date                     Rewrite timestamps written as seconds since the epoch as
-                                         dates
-      --normalize-dates                  Rewrite every timestamp as RFC 3339
-      --tz <ZONE>                        Rewrite every timestamp in this zone, such as UTC or
-                                         America/New_York
-      --relative                         Rewrite every timestamp as its distance from now, such as
-                                         2 hours ago
-      --no-wordcolor                     Leave keywords such as ERROR, TCP, and SELECT in the style
-                                         around them
-      --lookups                          Mark unknown users, and follow ports and addresses with
-                                         their services, hosts, and locations
-      --no-lookups                       Turn lookups off, even when the config file turns them on
-      --stats                            Write statistics on the kept lines in place of the lines
-      --summary                          Write the line count, error count, and time range after the
-                                         lines
-      --histogram [<PERIOD>]             Write the number of lines in each period, such as 5m or 1h,
-                                         in place of the lines
-      --stats-format <FORMAT>            Format of --stats, --summary, and --histogram (text, json,
-                                         csv)
-  -h, --help                             Print help
-  -V, --version                          Print version
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Input:
+  -m, --mode <MODE>
+          Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf, cloud-init, cron, distcc,
+          dmesg, docker, dovecot, elasticsearch, exim, fetchmail, ftpstats, git, haproxy, httpd,
+          icecast, journalctl (or systemd), kubernetes (or k8s), mongodb, mysql, nginx-error, oops,
+          php, postfix, postgresql, procmail, proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog,
+          super, syslog, systemd-resolved, terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
+
+      --auto
+          Detect the log format from the first lines of the input
+
+  -p, --path <PATH>...
+          Paths to the log files, or - to read stdin. A file name may hold * and ?
+
+  -f, --follow
+          Keep reading the --path files or the --cloudwatch log group as they grow, as tail -f does
+
+      --merge
+          Interleave the lines of several --path files in time order, labeled with their file
+
+      --label
+          Start each line with where it came from: its file, the address that sent it, or its log
+          stream
+
+  -r, --recursive
+          Read the files in the subdirectories of a --path directory too
+
+      --listen <ADDRESS>
+          Receive log lines over TCP or HTTP on this address, such as :8080 or 127.0.0.1:8080
+
+      --syslog [<ADDRESS>]
+          Receive syslog messages over UDP and TCP on this address (default :514)
+
+      --cloudwatch <GROUP>
+          Read the events of this CloudWatch Logs log group, with the AWS CLI's region and
+          credentials
+
+      --rate-limit <LINES>
+          Keep at most this many input lines each second, dropping the rest
+
+      --encoding <ENCODING>
+          Read the input, and write ansi and plain output, in this encoding, utf-8 or latin1
+          (default: the locale's)
+
+Filters:
+      --level <LEVELS>
+          Keep only lines at these levels, as LEVEL,LEVEL, or drop a level written !LEVEL
+          (repeatable)
+
+      --since <TIME>
+          Keep only lines written at or after this time, such as 2h ago or 2024-01-01
+
+      --until <TIME>
+          Keep only lines written at or before this time
+
+      --grep <PATTERN>
+          Keep only lines matching this pattern, and highlight the match (repeatable)
+
+      --exclude <PATTERN>
+          Drop lines matching this pattern (repeatable)
+
+      --filter <KEY=VALUE>
+          Keep only lines holding a field with this value, as KEY=VALUE, or not, as KEY!=VALUE
+          (repeatable)
+
+      --anonymize
+          Mask IP addresses, email addresses, and user names
+
+Output:
+      --websocket <ADDRESS>
+          Also send each line of output to WebSocket clients on this address, such as :8081
+
+      --forward <URL>
+          Also send each line of output to tcp://HOST:PORT, udp://HOST:PORT, or
+          http://HOST:PORT/PATH
+
+  -o, --output <OUTPUT>
+          Output format (ansi, csv, curses, html, json, jsonl, plain)
+
+      --css <FILE>
+          A style sheet to add to HTML output after the theme's rules
+
+      --line-numbers
+          Start each line of HTML output with its line number in the input
+
+      --fields <FIELDS>
+          Fields csv and jsonl output write, as FIELD,FIELD (repeatable)
+
+  -j, --jobs <JOBS>
+          Worker threads used to render a file (default: one per core)
+
+Colors:
+      --theme <THEME>
+          Color theme (dark, light, solarized, dracula, colorblind, high-contrast)
+
+      --color <KEY=COLOR>
+          Override one token color, as KEY=COLOR (repeatable)
+
+      --profile <PROFILE>
+          Load a saved color profile
+
+      --save-profile <NAME>
+          Save the resolved colors as a profile and exit
+
+      --list-profiles
+          List saved color profiles
+
+      --list-themes
+          List available color themes
+
+      --no-wordcolor
+          Leave keywords such as ERROR, TCP, and SELECT in the style around them
+
+      --lookups
+          Mark unknown users, and follow ports and addresses with their services, hosts, and
+          locations
+
+      --no-lookups
+          Turn lookups off, even when the config file turns them on
+
+Timestamps:
+      --convert-date
+          Rewrite timestamps written as seconds since the epoch as dates
+
+      --normalize-dates
+          Rewrite every timestamp as RFC 3339
+
+      --tz <ZONE>
+          Rewrite every timestamp in this zone, such as UTC or America/New_York
+
+      --relative
+          Rewrite every timestamp as its distance from now, such as 2 hours ago
+
+Reports:
+      --stats
+          Write statistics on the kept lines in place of the lines
+
+      --summary
+          Write the line count, error count, and time range after the lines
+
+      --histogram [<PERIOD>]
+          Write the number of lines in each period, such as 5m or 1h, in place of the lines
+
+      --graph [<PERIOD>]
+          Write sparklines of the lines and errors in each period, such as 5m or 1h, in place of the
+          lines
+
+      --graph-field <FIELD>
+          Also draw the average of this field's numbers in each --graph period, such as duration
+
+      --stats-format <FORMAT>
+          Format of --stats, --summary, --histogram, and --graph (text, json, csv)
+
+Analysis:
+      --correlate
+          Write the lines that share a request, trace, or correlation ID together, under the ID
+
+      --diff
+          Compare two --path files line by line, as diff -u does, leaving timestamps and IDs out
+
+      --replay [<SPEED>]
+          Write the lines at the pace their timestamps give, SPEED times as fast (default 1)
+
+      --alert <PATTERN>
+          Send an alert for each input line matching this pattern (repeatable)
+
+      --alert-webhook <URL>
+          Post each alert as JSON to this http://HOST:PORT/PATH URL
+
+      --alert-desktop
+          Show each alert as a desktop notification
+
+Plugins:
+      --list-plugins
+          List all available plugins
+
+      --plugin-dir <DIR>
+          Also load plugin files from this directory (repeatable)
+
+      --reload-plugins
+          Load plugin files again whenever one changes
+
+      --test-regex <FILE>
+          Report which of a plugin file's patterns read each input line, and exit
+
+      --learn <NAME>
+          Write a plugin file named NAME whose patterns read the input lines, and exit
+
+      --plugin <NAME>
+          Read the input with this plugin, as --mode does
+
+      --disable-plugin <NAME>
+          Leave a plugin out of auto detection and refuse its mode (repeatable)
+
+Setup:
+      --config <CONFIG>
+          Config file to read instead of ~/.splash/config.toml or ~/.splashrc
+
+      --completions <SHELL>
+          Write a completion script for this shell (bash, zsh, fish), and exit
+
+      --man
+          Write the manual page in roff, and exit
+
+--man writes the manual page.
 ```
+
+A value splash does not know, such as a mode, theme, output format, color key, level, or field,
+exits with an error naming the values it accepts, and the closest of them when one is at most two
+edits away:
+
+```
+$ splash --mode sylog --path /var/log/syslog
+Error: Unknown mode 'sylog' (expected a mode --list-plugins lists). Did you mean 'syslog'?
+```
+
+A mode is a built-in mode, an alias such as `k8s`, or the name of a loaded plugin file.
 
 ---
 
@@ -221,7 +359,8 @@ tail -f /var/log/nginx/access.log | splash --mode httpd --summary
 ```
 
 Lines may end in LF or CRLF. Bytes that are not valid UTF-8 are written as U+FFFD and the lines
-after them are rendered as usual.
+after them are rendered as usual, unless the input is read as Latin-1 (see
+[Encodings](#encodings)).
 
 Ctrl-C does not stop splash at once. It keeps reading until the pipe closes, which happens when
 Ctrl-C also stops the program writing to it, and then writes what it writes at the end of its
@@ -229,6 +368,22 @@ input: the `--summary`, or the end of the HTML document. A second Ctrl-C stops s
 
 When the program reading splash's output exits, as `head` does, splash stops without an error
 message.
+
+### Encodings
+
+splash reads input in UTF-8 or in Latin-1 (ISO-8859-1). `--encoding latin1` reads every byte of
+stdin, of the `--path` files, and of lines received over the network as one Latin-1 character,
+so a log an older system wrote keeps its accented letters. Without `--encoding`, splash takes the
+encoding from the locale: the charset of the first of `LC_ALL`, `LC_CTYPE`, and `LANG` that is
+set, such as `de_DE.ISO-8859-1`, is Latin-1, and any other charset is UTF-8.
+
+```bash
+splash --mode syslog --path /var/log/legacy.log --encoding latin1
+```
+
+`ansi` and `plain` output are written in the same encoding, with a character Latin-1 has no byte
+for written as `?`, and `--graph` draws its sparklines with ASCII marks such as `_-*#`. `html`,
+`json`, `jsonl`, and `csv` are always written in UTF-8, and the curses viewer draws in UTF-8.
 
 ---
 
@@ -286,8 +441,8 @@ splash --auto --follow --recursive --path /var/log/app
 
 A file named more than once, directly and through a pattern or a directory, is read once. Each
 file is detected on its own in auto mode, and multi-line entries are tracked per file, while
-`--stats`, `--summary`, and `--histogram` count the lines of every file together. The curses
-viewer shows one file at a time.
+`--stats`, `--summary`, `--histogram`, and `--graph` count the lines of every file together. The
+curses viewer shows one file at a time.
 
 ### Merging files in time order
 
@@ -313,6 +468,82 @@ timestamp without a zone is read in the local zone. With `--follow`, the merged 
 in time order, and then each line a file gains is rendered as it arrives, labeled and without
 headers. In `json`, `jsonl`, and `csv` the label is the `source` field, and the `text` field holds
 the line as the log wrote it.
+
+### Correlating requests across services
+
+`--correlate` writes the lines that share an identifier together, each group under a header naming
+the identifier, and leaves out the lines no other line shares an identifier with. An identifier is
+a UUID, a 32-digit hexadecimal trace ID, or the value of a request, trace, correlation,
+transaction, or session ID field, such as `request_id=r-1001`, `"traceId": "4bf9"`, or
+`X-Request-ID: 77`:
+
+```bash
+splash --correlate --path api.log worker.log
+```
+
+```
+==> r-1001 <==
+api.log 2024-03-05T10:15:01Z INFO request_id=r-1001 GET /orders/7 accepted
+worker.log 2024-03-05T10:15:03Z INFO job started for request_id=r-1001
+worker.log 2024-03-05T10:15:04Z WARN job retried for request_id=r-1001
+api.log 2024-03-05T10:15:05Z ERROR request_id=r-1001 GET /orders/7 failed after 3000ms
+```
+
+The files are merged in time order, as `--merge` merges them, and the lines of several files start
+with their file's name. Groups are ordered by their first line. A line holding two identifiers is
+written in both groups, and a stack trace line stays with the line before it. `--correlate` reads
+stdin or `--path` files to their end, so it cannot be combined with `--follow`, the network
+inputs, or the curses viewer.
+
+### Comparing two runs
+
+`--diff` compares two `--path` files line by line and writes the lines that differ in hunks with
+three lines of context, as `diff -u` does. A line only the first file holds starts with `-`, colored
+as `failure`, a line only the second file holds starts with `+`, colored as `success`, and a line
+both hold starts with a space:
+
+```bash
+splash --diff --path deploy-good.log deploy-failed.log
+```
+
+```
+--- deploy-good.log
++++ deploy-failed.log
+@@ -1,8 +1,8 @@
+  2024-03-05T10:15:01Z INFO deploy 0f8fad5b-d9cb-469f-a165-70867728950e started
+- 2024-03-05T10:15:02Z INFO pulling image web:1.4.2
++ 2024-03-06T08:00:02Z INFO pulling image web:1.4.3
+  2024-03-05T10:15:09Z INFO image pulled
+  2024-03-05T10:15:10Z INFO migrating database
+  2024-03-05T10:15:14Z INFO migrations applied
+  2024-03-05T10:15:15Z INFO starting 3 replicas
+- 2024-03-05T10:15:20Z INFO replicas healthy
+- 2024-03-05T10:15:21Z INFO deploy finished
++ 2024-03-06T08:00:47Z ERROR replica 2 failed its health check
++ 2024-03-06T08:00:48Z ERROR deploy rolled back
+```
+
+Lines are compared with their timestamps, UUIDs, and 32-digit hexadecimal IDs left out, so two
+runs that differ only in when they ran and in the IDs they generated write nothing. A line both
+files hold is written as the first file has it. `--diff` cannot be combined with `--follow`,
+`--merge`, `--correlate`, or the curses viewer.
+
+### Replaying a log at its original pace
+
+`--replay` writes the lines of stdin or of the `--path` files at the pace their timestamps give, so
+a recorded incident plays back as it happened. `--replay SPEED` plays it SPEED times as fast:
+
+```bash
+splash --replay --path incident.log
+splash --replay 10 --path api.log worker.log
+```
+
+Each line waits for the time between its timestamp and the last line's timestamp, divided by the
+speed. The files are merged in time order, as `--merge` merges them, and the lines of several files
+start with their file's name. A line without a timestamp, such as a stack trace line, is written
+with the line before it. Ctrl-C stops the replay and writes what splash writes when its input ends,
+such as the `--summary`. `--replay` cannot be combined with `--follow`, `--correlate`, `--diff`,
+the network inputs, or the curses viewer.
 
 ---
 
@@ -507,6 +738,32 @@ supported. The curses viewer writes no output to forward, so `--forward` cannot 
 
 ---
 
+## Alerts
+
+`--alert PATTERN` sends an alert for each input line matching the regular expression, to a webhook,
+the desktop, or both:
+
+```bash
+splash --mode syslog --path /var/log/syslog --follow --alert 'ERROR|panic' \
+  --alert-webhook http://127.0.0.1:9000/hooks/logs --alert-desktop
+```
+
+`--alert-webhook URL` posts each alert to an `http://HOST:PORT/PATH` URL as a JSON object naming
+the first pattern the line matched and the line:
+
+```json
+{"pattern":"ERROR|panic","line":"Mar  5 10:15:01 web1 app[311]: ERROR disk full"}
+```
+
+`--alert-desktop` shows each alert as a desktop notification titled `splash`, with `osascript` on
+macOS and `notify-send` elsewhere. `--alert` is repeatable, and at least one of `--alert-webhook`
+and `--alert-desktop` is required. Alerts are raised for input lines before `--level`, `--grep`,
+and the other filters judge them, and after `--rate-limit` drops lines. A thread of its own sends
+the alerts, splash waits for it to send what is queued before exiting, and each alert that cannot
+be delivered is reported on stderr. `--alert` cannot be combined with the curses viewer.
+
+---
+
 ## Rate limiting
 
 `--rate-limit N` keeps at most N input lines in each one-second window and drops the rest, so a
@@ -548,6 +805,12 @@ placed = '^(?P<timestamp>\S+ \S+) (?P<level>[A-Z]+) order (?P<transaction>\d+) p
 splash --mode orders --path /var/log/orders.log
 splash --test-regex ~/.splash/plugins/orders.toml --path /var/log/orders.log
 splash --mode orders --path /var/log/orders.log --follow --reload-plugins
+```
+
+`--learn NAME` writes a first draft of a plugin file from sample lines:
+
+```bash
+splash --learn orders --path /var/log/orders.log > ~/.splash/plugins/orders.toml
 ```
 
 `--test-regex` reports which pattern read each line, `--reload-plugins` loads plugin files again
@@ -839,11 +1102,31 @@ Lines per 1h
 2023-10-03T14:00:00Z  ####################                      2
 ```
 
+`--graph PERIOD` writes a sparkline of the lines and one of the errors in each period in place of
+the lines, with the periods `--histogram` uses. `--graph-field FIELD` adds a sparkline of the
+average of the numbers a field starts with, such as squid's `duration`. Each mark is scaled to the
+largest value of its sparkline, which is written after it, and a period holding no value of the
+field is a space. `--output json` names the field of each token.
+
+```bash
+splash --mode squid --path access.log --graph 1m --graph-field duration
+```
+
+```
+Graph per 1m
+============
+2021-03-03T00:00:00Z to 2021-03-03T00:03:00Z
+lines             ▇▃▁█  max 4
+errors            ▁▁▁█  max 2
+average duration  ▃▂ █  max 1000
+```
+
 Times are written in RFC 3339 in the local zone, or in the `--tz` zone. Filters apply first, so
 statistics count only the lines splash keeps.
 
 `--stats-format json` writes each report as one JSON object, and `--stats-format csv` writes the
-report and summary as `metric,key,value` rows and the histogram as `start,count` rows:
+report and summary as `metric,key,value` rows, the histogram as `start,count` rows, and the graph
+as `start,lines,errors` rows with the field's average after them:
 
 ```
 metric,key,value
@@ -856,9 +1139,9 @@ address,10.0.0.5,3
 ```
 
 Reading from standard input, splash writes the report or summary when the input ends. Following
-a file with `--follow`, it writes the `--stats` or `--histogram` report again each time the file
-grows, and writes the summary when it is stopped with Ctrl-C or `kill`. The curses viewer does
-not show statistics, so `--output curses` cannot be combined with them.
+a file with `--follow`, it writes the `--stats`, `--histogram`, or `--graph` report again each time
+the file grows, and writes the summary when it is stopped with Ctrl-C or `kill`. The curses viewer
+does not show statistics, so `--output curses` cannot be combined with them.
 
 ---
 
@@ -905,9 +1188,15 @@ then the file's `[colors]` table, then any `--color` overrides.
 
 ### Themes
 
-`--theme NAME` selects one of the presets `dark` (the default), `light`, `solarized`, and
-`dracula`. `--list-themes` prints them. A theme sets a color for every token kind and the page
-colors used by HTML output.
+`--theme NAME` selects one of the presets `dark` (the default), `light`, `solarized`, `dracula`,
+`colorblind`, and `high-contrast`. `--list-themes` prints them. A theme sets a color for every
+token kind and the page colors used by HTML output.
+
+`colorblind` uses only the Okabe-Ito palette, whose colors stay apart for readers with
+protanopia, deuteranopia, or tritanopia, and paints success sky blue and failure vermillion in
+place of green and red. `high-contrast` paints every token at least seven times as bright as its
+black background by the WCAG contrast ratio, the ratio WCAG's AAA level asks of text, and puts
+levels, methods, and outcomes in bold.
 
 ```bash
 splash --mode clf --path access.log --theme solarized
@@ -2063,6 +2352,19 @@ lines without them. `CLICOLOR_FORCE=1` writes them anywhere, for a pager or a fi
 CLICOLOR_FORCE=1 splash --mode syslog --path /var/log/syslog | less -R
 ```
 
+splash reads the terminal's abilities from the environment, in this order:
+
+| Variable | Effect |
+| --- | --- |
+| `CLICOLOR_FORCE` set to anything but `0` | Colors are written, whatever the other variables say |
+| `NO_COLOR` set | No colors |
+| `TERM=dumb` | No colors, and `--output curses` exits with an error |
+| `CLICOLOR=0` | No colors |
+| `COLORTERM=truecolor` or `24bit` | Hex colors, such as the `solarized` theme's, are written as they are |
+
+Without `COLORTERM=truecolor` or `24bit`, each hex color is written as the nearest of the 16 ANSI
+colors, so a theme of hex colors still shows on a terminal that cannot show them.
+
 Control characters in a log line are written as text the terminal shows rather than obeys, so a
 line cannot move the cursor, clear the screen, or set the window title: escape and the other C0
 controls in caret notation (`^[`, `^G`, `^M`), delete as `^?`, and a C1 control as its hex code
@@ -2130,13 +2432,16 @@ its rules win. [`examples/html/report.css`](examples/html/report.css) is a start
 `--line-numbers` starts each line with its line number in the input, in a `splash-line-number`
 span. Blank lines and lines a filter drops are counted, so the numbers match the file, but lines
 `--rate-limit` drops are not. The numbers cannot be selected, so copying text from the page leaves
-them out.
+them out, and they carry `aria-hidden`, so screen readers leave them out.
 
 ```bash
 splash --mode httpd --path access.log --output html --css report.css --line-numbers > access.html
 ```
 
 Both options need `--output html`.
+
+The lines are in a `<pre>` with `role="log"` and the label `Log lines`, inside the page's `<main>`
+landmark, so a screen reader can jump to the log and name it.
 
 ### json
 
@@ -2211,6 +2516,25 @@ inside a line is kept, and a last line without an ending gets one. Blank lines a
 cat access.log | splash --mode clf --output plain
 ```
 
+### Screen readers
+
+Every output writes the text of each line in the order the log holds it, and colors add no words
+to it. For a screen reader:
+
+- `--output plain`, or `NO_COLOR` with the default output, writes the lines without escape
+  sequences.
+- `--output html` puts the lines in a log region labeled `Log lines` inside the `<main>` landmark,
+  and hides line numbers from screen readers.
+- The curses viewer redraws the whole screen as it scrolls. `--output plain` writes each line once,
+  to a terminal or to a pager such as `less`.
+- `--diff` marks lines with `-` and `+` as well as with color.
+- `--theme high-contrast` and `--theme colorblind` serve readers with low vision and color
+  blindness.
+
+```bash
+splash --mode syslog --path /var/log/syslog --output plain | less
+```
+
 ---
 
 ## Performance
@@ -2219,10 +2543,11 @@ Parsed tokens borrow the text of the line they came from, so a line is read once
 on its way to the renderer. Patterns are compiled the first time they are needed and kept for the
 rest of the run, and patterns supplied at run time are cached by `parser::cached_pattern`.
 
-A file of 64 KiB or more is memory mapped rather than read into memory. Its text is rendered and
-written 1 MiB at a time, at line breaks, and each piece's lines are split across worker threads,
-so the memory splash holds stays the same whatever the size of the file. The mapped pages are the
-file's own, which the system drops and reads again as it needs. `--jobs N` sets the worker count,
+A file is read, rendered, and written 256 KiB at a time, at line breaks, and each piece's lines
+are split across worker threads, so the memory splash holds stays the same whatever the size of
+the file. Auto detection reads only the lines it samples. `--merge`, `--correlate`, `--replay`,
+and `--diff` need every line of their files at once and hold them in memory, and `--merge` and
+`--diff` memory map a file of 64 KiB or more rather than copy it. `--jobs N` sets the worker count,
 which defaults to one per core. Inputs under 512 lines are rendered on one thread, where splitting
 the work costs more than it saves.
 
@@ -2245,23 +2570,22 @@ SPLASH_BENCH_SIZES=small,medium,large,huge cargo bench
 
 ```
 Rendering 20000 log lines
-  splash clf ansi                 20000 lines in    34.630 ms        577527 lines/sec    1.00x
-  splash clf ansi -j 18           20000 lines in     6.020 ms       3322489 lines/sec    5.75x
-  splash clf plain                20000 lines in    19.997 ms       1000138 lines/sec    1.73x
-  splash ad-hoc ansi              20000 lines in    47.537 ms        420726 lines/sec    0.73x
+  splash clf ansi                 20000 lines in    36.586 ms        546665 lines/sec    1.00x
+  splash clf ansi -j 18           20000 lines in     5.913 ms       3382640 lines/sec    6.19x
+  splash clf plain                20000 lines in    21.941 ms        911522 lines/sec    1.67x
+  splash ad-hoc ansi              20000 lines in    45.360 ms        440920 lines/sec    0.81x
 
 Rendering log files with the splash binary (clf, ansi, output discarded)
-  small          10000 lines       0.9 MB in     0.010 s       988443 lines/sec     84.1 MB/sec   24.3 MB peak memory
-  medium        600000 lines      51.5 MB in     0.340 s      1765349 lines/sec    151.7 MB/sec   82.6 MB peak memory
-  large        2500000 lines     214.8 MB in     1.516 s      1649017 lines/sec    141.7 MB/sec  248.1 MB peak memory
-  huge        13000000 lines    1116.9 MB in     7.788 s      1669237 lines/sec    143.4 MB/sec 1150.3 MB peak memory
+  small          10000 lines       0.9 MB in     0.012 s       804791 lines/sec     68.5 MB/sec   19.3 MB peak memory
+  medium        600000 lines      51.5 MB in     0.322 s      1862132 lines/sec    160.0 MB/sec   21.9 MB peak memory
+  large        2500000 lines     214.8 MB in     1.396 s      1790540 lines/sec    153.8 MB/sec   21.6 MB peak memory
+  huge        13000000 lines    1116.9 MB in     6.329 s      2054189 lines/sec    176.5 MB/sec   22.7 MB peak memory
 
-Starting up and exiting on an empty input: 3.03 ms, 9.6 MB peak memory
+Starting up and exiting on an empty input: 3.20 ms, 10.4 MB peak memory
 ```
 
-The numbers above are from one machine with 18 cores, running macOS. The peak memory of a file
-includes the pages of the file mapped while it was read, about 33 MB above the file's size.
-Run the benchmark on yours before drawing conclusions from them.
+The numbers above are from one machine with 18 cores, running macOS. Run the benchmark on yours
+before drawing conclusions from them.
 
 ### Tracking regressions
 
@@ -2340,8 +2664,11 @@ of each change can be compared by hand.
 - Several files at once, named one by one, by a `*` and `?` pattern, or by a directory
 - Directory watching, with `--recursive` for subdirectories
 - Several files merged in time order with `--merge`
+- Lines from several services grouped by request, trace, or correlation ID with `--correlate`
+- Two runs compared line by line, leaving timestamps and IDs out, with `--diff`
+- Logs played back at the pace they were written, or faster, with `--replay`
 - Lines labeled with the file or host they came from with `--label`
-- Memory-mapped reads for files of 64 KiB or more
+- Files read 256 KiB at a time, holding the same memory whatever their size
 - Stdin streaming
 - Lines received over TCP and HTTP with `--listen`
 - Syslog messages received over UDP and TCP with `--syslog`
@@ -2349,6 +2676,7 @@ of each change can be compared by hand.
 - Rate limiting of input lines with `--rate-limit`
 - Masking addresses and user names with `--anonymize`
 - Forwarding output over TCP, UDP, or HTTP with `--forward`
+- Alerts on matching lines, posted to a webhook or shown on the desktop, with `--alert`
 
 **Performance**
 - Parsing that borrows the input rather than copying it
@@ -2360,8 +2688,9 @@ of each change can be compared by hand.
 **Configuration**
 - `~/.splash/config.toml` and `~/.splashrc` config files
 - Per-plugin settings
-- Plugin files that add log formats, with `--test-regex` and `--reload-plugins` for writing them
-- Color themes: dark, light, solarized, dracula
+- Plugin files that add log formats, with `--learn`, `--test-regex`, and `--reload-plugins` for
+  writing them
+- Color themes: dark, light, solarized, dracula, colorblind, high-contrast
 - Per-field color overrides from the command line
 - Saved color profiles
 
@@ -2374,6 +2703,8 @@ of each change can be compared by hand.
 - CSV with selected fields
 - Plain text
 - ANSI, HTML, JSON, or plain output sent to browsers over WebSocket with `--websocket`
+- Statistics, histograms, and sparkline graphs in place of the lines with `--stats`,
+  `--histogram`, and `--graph`
 
 ---
 
@@ -2391,6 +2722,37 @@ cargo install --path .
 
 # Run tests
 cargo test
+```
+
+### Shell completion
+
+`--completions SHELL` writes a script that completes splash's options and the values of those that
+take one of a set: modes, output formats, themes, encodings, report formats, files, and
+directories. Load it from the shell's startup file:
+
+```bash
+# ~/.bashrc
+eval "$(splash --completions bash)"
+
+# ~/.zshrc, after compinit
+eval "$(splash --completions zsh)"
+
+# fish
+splash --completions fish > ~/.config/fish/completions/splash.fish
+```
+
+The zsh script loads the bash completion function through zsh's `bashcompinit`, so zsh offers the
+same words without their descriptions. The fish script describes each option.
+
+### Man page
+
+`--man` writes splash's manual page in roff: every option `--help` lists, the environment
+variables splash reads, its files, and examples. Save it in a `man1` directory on the manual
+search path:
+
+```bash
+splash --man > /usr/local/share/man/man1/splash.1
+man splash
 ```
 
 ### Requirements

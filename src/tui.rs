@@ -14,6 +14,10 @@ pub const NEEDS_TERMINAL: &str =
 /// Message shown when interactive output is asked for with no log to show
 pub const NEEDS_INPUT: &str = "curses output needs a log; give --path or pipe one in";
 
+/// Explains why the viewer cannot run in a terminal that cannot move the cursor
+pub const NEEDS_CURSOR: &str =
+    "curses output needs a terminal that can move the cursor, and TERM is dumb";
+
 /// Builds a viewer over rendered lines, reserving the bottom row for the status line
 pub fn viewer_for(lines: Vec<Line>, rows: u16) -> Viewer {
     Viewer::with_lines(lines, rows.saturating_sub(1) as usize)

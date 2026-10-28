@@ -128,6 +128,27 @@ This builds a plugin for an order service that writes:
 Save a few real lines to a file, `orders.log`, including the unusual ones: errors, lines with
 missing fields, and lines another program writes into the same log.
 
+### Learn a first draft
+
+`--learn NAME` reads lines from `--path` or stdin and writes a plugin file whose patterns read
+them. Lines that agree up to their first word share a pattern. A pattern styles the timestamps,
+levels, numbers, addresses, durations, email addresses, paths, HTTP methods, and protocols its
+lines agree on, keeps the words they agree on, and reads the rest of the line as the message:
+
+```bash
+splash --learn orders --path orders.log > ~/.splash/plugins/orders.toml
+```
+
+```toml
+name = 'orders'
+description = 'Learned from 3 sample lines'
+
+[patterns]
+line = '^(?P<timestamp>\d+\-\d+\-\d+\s+\d+:\d+:\d+)\s+(?P<level>[A-Za-z]+)\s+(?P<message>.*)$'
+```
+
+The learned file reads every sample line. Editing it adds the fields inside the message.
+
 ### Write the plugin file
 
 Create `~/.splash/plugins/orders.toml` with a pattern for the most specific line first and a

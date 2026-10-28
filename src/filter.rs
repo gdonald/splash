@@ -7,10 +7,16 @@
 //! with that entry.
 use crate::keywords::restyle;
 use crate::output::{ParsedLine, Token, TokenKind};
+use crate::suggest;
 use crate::time::{self, BadMoment};
 use crate::zone::Zone;
 use regex::Regex;
 use std::fmt;
+
+/// The level names `--level` lists in its errors
+const LEVEL_NAMES: [&str; 7] = [
+    "trace", "debug", "info", "notice", "warn", "error", "critical",
+];
 
 /// Error returned when a filter given on the command line cannot be built
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,8 +33,9 @@ impl fmt::Display for FilterError {
         match self {
             FilterError::UnknownLevel(name) => write!(
                 f,
-                "Unknown log level '{}' (expected trace, debug, info, notice, warn, error, or critical)",
-                name
+                "Unknown log level '{}' (expected trace, debug, info, notice, warn, error, or critical){}",
+                name,
+                suggest::hint(name, LEVEL_NAMES)
             ),
             FilterError::Moment(error) => write!(f, "{}", error),
             FilterError::BadPattern { pattern, message } => {
@@ -39,7 +46,12 @@ impl fmt::Display for FilterError {
                 "Invalid field filter '{}' (expected KEY=VALUE, such as ip=192.168.1.1)",
                 value
             ),
-            FilterError::UnknownField(key) => write!(f, "Unknown field '{}'", key),
+            FilterError::UnknownField(key) => write!(
+                f,
+                "Unknown field '{}'{}",
+                key,
+                suggest::hint(key, TokenKind::names())
+            ),
         }
     }
 }

@@ -4,9 +4,133 @@
 //! memory mapped instead, so splash pages in only the parts of a large log it
 //! renders rather than copying the whole file first.
 use memmap2::Mmap;
+use std::borrow::Cow;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+/// How the bytes of a log are read as text, and how stdout is written
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Encoding {
+    /// UTF-8, with bytes that are not valid UTF-8 replaced by U+FFFD
+    #[default]
+    Utf8,
+    /// ISO-8859-1, one character per byte
+    Latin1,
+}
+
+/// Error returned when `--encoding` names an encoding splash cannot read
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownEncoding(pub String);
+
+impl fmt::Display for UnknownEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Unknown encoding '{}' (expected utf-8 or latin1){}",
+            self.0,
+            crate::suggest::hint(&self.0, ["utf-8", "utf8", "latin1"])
+        )
+    }
+}
+
+impl std::error::Error for UnknownEncoding {}
+
+impl Encoding {
+    /// Reads an encoding name such as `utf-8`, `latin1`, or `ISO-8859-1`
+    pub fn parse(name: &str) -> Result<Encoding, UnknownEncoding> {
+        match charset(name).as_str() {
+            "utf8" => Ok(Encoding::Utf8),
+            "latin1" | "iso88591" => Ok(Encoding::Latin1),
+            _ => Err(UnknownEncoding(name.to_string())),
+        }
+    }
+
+    /// The encoding the locale names, from the first of `LC_ALL`,
+    /// `LC_CTYPE`, and `LANG` that is set: Latin-1 for a charset such as
+    /// `de_DE.ISO-8859-1`, and UTF-8 for any other
+    pub fn from_locale(
+        lc_all: Option<&str>,
+        lc_ctype: Option<&str>,
+        lang: Option<&str>,
+    ) -> Encoding {
+        let locale = [lc_all, lc_ctype, lang]
+            .into_iter()
+            .flatten()
+            .find(|value| !value.is_empty());
+        let named = locale
+            .and_then(|locale| locale.split_once('.'))
+            .map(|(_, rest)| rest.split('@').next().unwrap_or(rest));
+
+        named
+            .and_then(|name| Encoding::parse(name).ok())
+            .unwrap_or_default()
+    }
+
+    /// The text `bytes` hold in this encoding
+    pub fn decode<'a>(&self, bytes: &'a [u8]) -> Cow<'a, str> {
+        match self {
+            Encoding::Latin1 if !bytes.is_ascii() => {
+                Cow::Owned(bytes.iter().map(|byte| *byte as char).collect())
+            }
+            _ => String::from_utf8_lossy(bytes),
+        }
+    }
+
+    /// The bytes writing `text` in this encoding. A character Latin-1 has no
+    /// byte for is written as `?`.
+    pub fn encode<'a>(&self, text: &'a str) -> Cow<'a, [u8]> {
+        match self {
+            Encoding::Latin1 if !text.is_ascii() => Cow::Owned(
+                text.chars()
+                    .map(|character| u8::try_from(character).unwrap_or(b'?'))
+                    .collect(),
+            ),
+            _ => Cow::Borrowed(text.as_bytes()),
+        }
+    }
+}
+
+/// An encoding name lowercased with its hyphens and underscores removed
+fn charset(name: &str) -> String {
+    name.chars()
+        .filter(|character| !matches!(character, '-' | '_'))
+        .map(|character| character.to_ascii_lowercase())
+        .collect()
+}
+
+/// The encoding input is read in, once `set_encoding` has chosen one
+static ENCODING: std::sync::OnceLock<Encoding> = std::sync::OnceLock::new();
+
+/// Chooses the encoding for the rest of the run
+pub fn set_encoding(encoding: Encoding) {
+    let _ = ENCODING.set(encoding);
+}
+
+/// The encoding chosen for the run, UTF-8 until one is chosen
+pub fn encoding() -> Encoding {
+    ENCODING.get().copied().unwrap_or_default()
+}
+
+/// The text `bytes` hold in the run's encoding
+pub fn decode(bytes: &[u8]) -> Cow<'_, str> {
+    encoding().decode(bytes)
+}
+
+/// The encoding stdout is written in, once `set_output_encoding` has
+/// chosen one
+static OUTPUT_ENCODING: std::sync::OnceLock<Encoding> = std::sync::OnceLock::new();
+
+/// Chooses the encoding stdout is written in for the rest of the run
+pub fn set_output_encoding(encoding: Encoding) {
+    let _ = OUTPUT_ENCODING.set(encoding);
+}
+
+/// The encoding stdout is written in, UTF-8 until one is chosen
+pub fn output_encoding() -> Encoding {
+    OUTPUT_ENCODING.get().copied().unwrap_or_default()
+}
 
 /// Files at least this large are memory mapped rather than read into memory
 pub const MMAP_THRESHOLD: u64 = 64 * 1024;
@@ -26,18 +150,26 @@ impl LogFile {
     /// the mapping. Bytes that are not valid UTF-8 are replaced, which needs a
     /// copy, so such a file is never left mapped.
     pub fn open(path: &Path) -> io::Result<LogFile> {
+        LogFile::open_with(path, encoding())
+    }
+
+    /// Reads a log file written in `encoding`. A Latin-1 file holding bytes
+    /// above 127 is decoded into memory rather than mapped.
+    pub fn open_with(path: &Path, encoding: Encoding) -> io::Result<LogFile> {
         let file = File::open(path)?;
 
         if file.metadata()?.len() < MMAP_THRESHOLD {
-            return Ok(LogFile::from_bytes(read_bytes(&file)?));
+            return Ok(LogFile::from_bytes(read_bytes(&file)?, encoding));
         }
 
         // Safety: a log file changing underneath the mapping changes what
         // splash renders, which is the same risk as reading the file twice.
         let mapping = unsafe { Mmap::map(&file)? };
 
-        if std::str::from_utf8(&mapping).is_err() {
-            return Ok(LogFile::from_bytes(mapping.to_vec()));
+        if (encoding == Encoding::Latin1 && !mapping.is_ascii())
+            || std::str::from_utf8(&mapping).is_err()
+        {
+            return Ok(LogFile::from_bytes(mapping.to_vec(), encoding));
         }
 
         Ok(LogFile {
@@ -75,10 +207,11 @@ impl LogFile {
         self.len() == 0
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> LogFile {
-        let text = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    fn from_bytes(bytes: Vec<u8>, encoding: Encoding) -> LogFile {
+        let text = match (encoding, String::from_utf8(bytes)) {
+            (Encoding::Utf8, Ok(text)) => text,
+            (_, Ok(text)) => encoding.decode(text.as_bytes()).into_owned(),
+            (_, Err(error)) => encoding.decode(error.as_bytes()).into_owned(),
         };
 
         LogFile::from_text(text)
@@ -113,9 +246,7 @@ pub fn read_line<R: BufRead>(reader: &mut R, bytes: &mut Vec<u8>) -> io::Result<
         return Ok(None);
     }
 
-    Ok(Some(
-        String::from_utf8_lossy(without_line_ending(bytes)).into_owned(),
-    ))
+    Ok(Some(decode(without_line_ending(bytes)).into_owned()))
 }
 
 fn without_line_ending(line: &[u8]) -> &[u8] {
@@ -207,7 +338,7 @@ pub fn take_complete_lines(pending: &mut Vec<u8>) -> Option<String> {
     let end = pending.iter().rposition(|byte| *byte == b'\n')?;
     let complete: Vec<u8> = pending.drain(..=end).collect();
 
-    Some(String::from_utf8_lossy(&complete).into_owned())
+    Some(decode(&complete).into_owned())
 }
 
 /// The files a `--path` value names. A value whose file name holds `*` or
@@ -303,7 +434,56 @@ pub fn files_in(directory: &Path, recursive: bool) -> io::Result<Vec<PathBuf>> {
 
 /// The bytes of text splash renders and writes at a time, so a large file
 /// is never held rendered in memory all at once
-pub const CHUNK_BYTES: usize = 1024 * 1024;
+pub const CHUNK_BYTES: usize = 256 * 1024;
+
+/// Reads a file from its start, handing `render` each run of whole lines
+/// once at least `size` bytes have been read, so the memory splash holds
+/// stays the same whatever the size of the file, decoding them in
+/// `encoding`. Returns the bytes after the last line break, and the
+/// number of bytes read.
+pub fn read_chunks(
+    path: &Path,
+    size: usize,
+    encoding: Encoding,
+    mut render: impl FnMut(&str),
+) -> io::Result<(Vec<u8>, u64)> {
+    let mut file = File::open(path)?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut read: u64 = 0;
+    let mut count = read_more(&mut file, &mut buffer, size)?;
+
+    while count > 0 {
+        read += count as u64;
+
+        let whole_lines = match buffer.len() >= size {
+            true => buffer.iter().rposition(|byte| *byte == b'\n'),
+            false => None,
+        };
+
+        if let Some(end) = whole_lines {
+            let rest = buffer.split_off(end + 1);
+
+            render(&encoding.decode(&buffer));
+            buffer = rest;
+        }
+
+        count = read_more(&mut file, &mut buffer, size)?;
+    }
+
+    Ok((buffer, read))
+}
+
+/// Reads up to `size` more bytes onto the end of `buffer`, returning how
+/// many were read
+fn read_more(file: &mut File, buffer: &mut Vec<u8>, size: usize) -> io::Result<usize> {
+    let start = buffer.len();
+    buffer.resize(start + size, 0);
+
+    let count = file.read(&mut buffer[start..])?;
+    buffer.truncate(start + count);
+
+    Ok(count)
+}
 
 /// Splits text into pieces of about `size` bytes, each ending at a line
 /// break, except a last piece the text ends without one, or a line longer

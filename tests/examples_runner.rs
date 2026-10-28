@@ -867,7 +867,7 @@ fn test_html_output_mode_wraps_the_document() {
     let output = result.unwrap();
 
     assert!(output.starts_with("<!DOCTYPE html>"));
-    assert!(output.contains("<pre class=\"splash\">"));
+    assert!(output.contains("<pre class=\"splash\" role=\"log\" aria-label=\"Log lines\">"));
     assert!(output.contains("<span class=\"splash-ip\">192.168.1.10</span>"));
     assert!(output.trim_end().ends_with("</html>"));
 }
@@ -939,7 +939,14 @@ fn test_list_themes_names_every_preset() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success());
-    for name in ["dark", "light", "solarized", "dracula"] {
+    for name in [
+        "dark",
+        "light",
+        "solarized",
+        "dracula",
+        "colorblind",
+        "high-contrast",
+    ] {
         assert!(stdout.contains(name), "stdout was: {}", stdout);
     }
 }
@@ -6928,7 +6935,7 @@ fn test_stats_cannot_be_shown_in_the_curses_viewer() {
 
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("The curses viewer cannot show --stats, --summary, or --histogram"));
+        .contains("The curses viewer cannot show --stats, --summary, --histogram, or --graph"));
 }
 
 #[cfg(unix)]
@@ -8446,6 +8453,1061 @@ fn test_test_regex_reports_a_path_that_cannot_be_read() {
     assert!(!missing_file.status.success());
 }
 
+#[test]
+fn test_correlate_writes_the_lines_of_several_files_sharing_an_id_together_in_time_order() {
+    let api = example_path("correlate_api.log");
+    let worker = example_path("correlate_worker.log");
+
+    let output = run_splash_file_args(&[
+        "--correlate",
+        "--output",
+        "plain",
+        "--path",
+        api.to_str().unwrap(),
+        worker.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "==> r-1001 <==\n",
+            "correlate_api.log 2024-03-05T10:15:01Z INFO request_id=r-1001 GET /orders/7 accepted\n",
+            "correlate_worker.log 2024-03-05T10:15:03Z INFO job started for request_id=r-1001\n",
+            "correlate_worker.log 2024-03-05T10:15:04Z WARN job retried for request_id=r-1001\n",
+            "correlate_api.log 2024-03-05T10:15:05Z ERROR request_id=r-1001 GET /orders/7 failed after 3000ms\n",
+        )
+    );
+}
+
+#[test]
+fn test_correlate_reads_stdin_without_labels() {
+    let output = run_splash_with_stdin_args(
+        &["--correlate", "--auto", "--output", "plain"],
+        &example_contents("correlate_api.log"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "==> r-1001 <==\n",
+            "2024-03-05T10:15:01Z INFO request_id=r-1001 GET /orders/7 accepted\n",
+            "2024-03-05T10:15:05Z ERROR request_id=r-1001 GET /orders/7 failed after 3000ms\n",
+        )
+    );
+}
+
+#[test]
+fn test_correlate_keeps_a_stack_trace_line_with_the_line_before_it() {
+    let output = run_splash_with_stdin_args(
+        &["--correlate", "--output", "plain"],
+        concat!(
+            "2024-03-05T10:15:01Z ERROR request_id=a panic: boom\n",
+            "  at main.go:12\n",
+            "2024-03-05T10:15:02Z INFO health check passed\n",
+            "2024-03-05T10:15:03Z INFO request_id=a restarted\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "==> a <==\n",
+            "2024-03-05T10:15:01Z ERROR request_id=a panic: boom\n",
+            "  at main.go:12\n",
+            "2024-03-05T10:15:03Z INFO request_id=a restarted\n",
+        )
+    );
+}
+
+#[test]
+fn test_correlate_refuses_the_curses_viewer() {
+    let api = example_path("correlate_api.log");
+    let output = run_splash(&[
+        "--correlate",
+        "--output",
+        "curses",
+        "--path",
+        api.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        ),
+        (
+            Some(1),
+            "Error: --correlate cannot be combined with the curses viewer\n".to_string()
+        )
+    );
+}
+
+#[test]
+fn test_correlate_reports_a_file_that_cannot_be_read() {
+    let directory = log_directory(&[("api.log", "request_id=a\n")]);
+    let missing = directory.path().join("missing.log");
+    let output = run_splash(&[
+        "--correlate",
+        "--path",
+        directory.path().join("api.log").to_str().unwrap(),
+        missing.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        ),
+        (
+            Some(1),
+            "Error: No such file or directory (os error 2)\n".to_string()
+        )
+    );
+}
+
+#[test]
+fn test_correlate_cannot_follow() {
+    let api = example_path("correlate_api.log");
+    let output = run_splash(&["--correlate", "--follow", "--path", api.to_str().unwrap()]).unwrap();
+
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("'--correlate' cannot be used with '--follow'"));
+}
+
+/// A directory holding the programs that show desktop notifications, each a
+/// script that records its arguments in `calls` and exits with `status`
+#[cfg(unix)]
+fn desktop_notifiers(status: i32) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let calls = directory.path().join("calls");
+
+    for program in ["osascript", "notify-send"] {
+        let script = directory.path().join(program);
+
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit {}\n",
+                calls.display(),
+                status
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    directory
+}
+
+/// Runs splash with stdin and a PATH of one directory, returning its stdout
+/// and stderr
+#[cfg(unix)]
+fn run_splash_with_path(args: &[&str], input: &str, path: &Path) -> (String, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(args)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn test_alert_shows_a_desktop_notification_for_each_matching_line() {
+    let notifiers = desktop_notifiers(0);
+    let (stdout, stderr) = run_splash_with_path(
+        &["--alert", "ERROR", "--alert-desktop", "--output", "plain"],
+        "INFO started\nERROR disk full\nERROR disk failing\n",
+        notifiers.path(),
+    );
+
+    let expected = match cfg!(target_os = "macos") {
+        true => concat!(
+            "-e\ndisplay notification \"ERROR disk full\" with title \"splash\"\n",
+            "-e\ndisplay notification \"ERROR disk failing\" with title \"splash\"\n",
+        ),
+        false => "splash\nERROR disk full\nsplash\nERROR disk failing\n",
+    };
+
+    assert_eq!(
+        (
+            stdout,
+            stderr,
+            std::fs::read_to_string(notifiers.path().join("calls")).unwrap()
+        ),
+        (
+            "INFO started\nERROR disk full\nERROR disk failing\n".to_string(),
+            String::new(),
+            expected.to_string()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_alert_raises_alerts_for_lines_the_filters_drop() {
+    let notifiers = desktop_notifiers(0);
+    let (stdout, _) = run_splash_with_path(
+        &[
+            "--alert",
+            "ERROR",
+            "--alert-desktop",
+            "--exclude",
+            "ERROR",
+            "--output",
+            "plain",
+        ],
+        "INFO started\nERROR disk full\n",
+        notifiers.path(),
+    );
+
+    assert_eq!(
+        (
+            stdout,
+            std::fs::read_to_string(notifiers.path().join("calls"))
+                .unwrap()
+                .contains("ERROR disk full")
+        ),
+        ("INFO started\n".to_string(), true)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_alert_reports_a_desktop_notification_that_fails() {
+    let notifiers = desktop_notifiers(3);
+    let (_, stderr) = run_splash_with_path(
+        &["--alert", "ERROR", "--alert-desktop"],
+        "ERROR disk full\n",
+        notifiers.path(),
+    );
+
+    assert_eq!(
+        stderr,
+        "Cannot show a desktop notification: exit status: 3\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_alert_reports_a_missing_desktop_notification_program() {
+    let empty = tempfile::TempDir::new().unwrap();
+    let (_, stderr) = run_splash_with_path(
+        &["--alert", "ERROR", "--alert-desktop"],
+        "ERROR disk full\n",
+        empty.path(),
+    );
+
+    assert_eq!(
+        stderr,
+        "Cannot show a desktop notification: No such file or directory (os error 2)\n"
+    );
+}
+
+#[test]
+fn test_alert_posts_each_matching_line_to_the_webhook() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 1024];
+
+        while !String::from_utf8_lossy(&request).ends_with('}') {
+            let count = stream.read(&mut buffer).unwrap();
+            request.extend_from_slice(&buffer[..count]);
+        }
+
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\n\r\n")
+            .unwrap();
+
+        String::from_utf8_lossy(&request).into_owned()
+    });
+
+    let webhook = format!("http://{}/hooks", address);
+    let output = run_splash_with_stdin_args(
+        &[
+            "--alert",
+            "disk",
+            "--alert-webhook",
+            &webhook,
+            "--output",
+            "plain",
+        ],
+        "INFO started\nERROR disk full\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (output, server.join().unwrap()),
+        (
+            "INFO started\nERROR disk full\n".to_string(),
+            format!(
+                "POST /hooks HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: 43\r\nConnection: close\r\n\r\n{{\"pattern\":\"disk\",\"line\":\"ERROR disk full\"}}",
+                address
+            )
+        )
+    );
+}
+
+#[test]
+fn test_alert_needs_a_webhook_or_the_desktop() {
+    let output = run_splash(&["--alert", "ERROR"]).unwrap();
+
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("<--alert-webhook <URL>|--alert-desktop>")
+    );
+}
+
+#[test]
+fn test_alert_refuses_a_bad_pattern_a_bad_webhook_and_the_curses_viewer() {
+    let errors: Vec<String> = [
+        vec!["--alert", "disk (full", "--alert-desktop"],
+        vec!["--alert", "ERROR", "--alert-webhook", "udp://127.0.0.1:9"],
+        vec!["--alert", "ERROR", "--alert-desktop", "--output", "curses"],
+    ]
+    .iter()
+    .map(|args| {
+        let stderr = String::from_utf8_lossy(&run_splash(args).unwrap().stderr).into_owned();
+
+        stderr.lines().next().unwrap().to_string()
+    })
+    .collect();
+
+    assert_eq!(
+        errors,
+        [
+            "Error: Invalid alert pattern 'disk (full': regex parse error:",
+            "Error: Invalid webhook URL 'udp://127.0.0.1:9' (expected http://HOST:PORT/PATH)",
+            "Error: --alert cannot be combined with the curses viewer",
+        ]
+    );
+}
+
+#[test]
+fn test_diff_writes_the_hunks_of_lines_that_differ_leaving_timestamps_and_ids_out() {
+    let good = example_path("diff_good_run.log");
+    let failed = example_path("diff_failed_run.log");
+
+    let output = run_splash_file_args(&[
+        "--diff",
+        "--output",
+        "plain",
+        "--path",
+        good.to_str().unwrap(),
+        failed.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        format!(
+            concat!(
+                "--- {}\n",
+                "+++ {}\n",
+                "@@ -1,8 +1,8 @@\n",
+                "  2024-03-05T10:15:01Z INFO deploy 0f8fad5b-d9cb-469f-a165-70867728950e started\n",
+                "- 2024-03-05T10:15:02Z INFO pulling image web:1.4.2\n",
+                "+ 2024-03-06T08:00:02Z INFO pulling image web:1.4.3\n",
+                "  2024-03-05T10:15:09Z INFO image pulled\n",
+                "  2024-03-05T10:15:10Z INFO migrating database\n",
+                "  2024-03-05T10:15:14Z INFO migrations applied\n",
+                "  2024-03-05T10:15:15Z INFO starting 3 replicas\n",
+                "- 2024-03-05T10:15:20Z INFO replicas healthy\n",
+                "- 2024-03-05T10:15:21Z INFO deploy finished\n",
+                "+ 2024-03-06T08:00:47Z ERROR replica 2 failed its health check\n",
+                "+ 2024-03-06T08:00:48Z ERROR deploy rolled back\n",
+            ),
+            good.display(),
+            failed.display()
+        )
+    );
+}
+
+#[test]
+fn test_diff_styles_removed_lines_as_failures_and_added_lines_as_successes() {
+    let directory = log_directory(&[("old.log", "start\nok\n"), ("new.log", "start\nfailed\n")]);
+
+    let output = run_splash_file_args(&[
+        "--diff",
+        "--output",
+        "json",
+        "--path",
+        directory.path().join("old.log").to_str().unwrap(),
+        directory.path().join("new.log").to_str().unwrap(),
+    ])
+    .unwrap();
+    let markers: Vec<&str> = output
+        .lines()
+        .skip(3)
+        .map(|line| {
+            line.split("\"tokens\":[")
+                .nth(1)
+                .unwrap()
+                .split('}')
+                .next()
+                .unwrap()
+        })
+        .collect();
+
+    assert_eq!(
+        markers,
+        [
+            r#"{"kind":"plain","text":" ""#,
+            r#"{"kind":"failure","text":"-""#,
+            r#"{"kind":"success","text":"+""#,
+        ]
+    );
+}
+
+#[test]
+fn test_diff_of_runs_differing_only_in_timestamps_writes_nothing() {
+    let directory = log_directory(&[
+        (
+            "old.log",
+            "2024-03-05T10:15:01Z start\n2024-03-05T10:15:02Z done\n",
+        ),
+        (
+            "new.log",
+            "2024-03-06T08:00:01Z start\n2024-03-06T08:00:09Z done\n",
+        ),
+    ]);
+
+    let output = run_splash_file_args(&[
+        "--diff",
+        "--path",
+        directory.path().join("old.log").to_str().unwrap(),
+        directory.path().join("new.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(output, "");
+}
+
+#[test]
+fn test_diff_refuses_one_file_the_curses_viewer_and_a_missing_file() {
+    let good = example_path("diff_good_run.log");
+    let good = good.to_str().unwrap();
+    let errors: Vec<String> = [
+        vec!["--diff", "--path", good],
+        vec!["--diff", "--output", "curses", "--path", good, good],
+        vec!["--diff", "--path", good, "/nonexistent/missing.log"],
+    ]
+    .iter()
+    .map(|args| String::from_utf8_lossy(&run_splash(args).unwrap().stderr).into_owned())
+    .collect();
+
+    assert_eq!(
+        errors,
+        [
+            "Error: --diff compares two files; give --path two files\n",
+            "Error: --diff cannot be combined with the curses viewer\n",
+            "Error: No such file or directory (os error 2)\n",
+        ]
+    );
+}
+
+#[test]
+fn test_diff_cannot_follow() {
+    let good = example_path("diff_good_run.log");
+    let output = run_splash(&["--diff", "--follow", "--path", good.to_str().unwrap()]).unwrap();
+
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("'--diff' cannot be used with '--follow'")
+    );
+}
+
+#[test]
+fn test_replay_writes_the_entries_in_time_order() {
+    let log = example_path("replay_deploy.log");
+    let output = run_splash_file_args(&[
+        "--replay",
+        "1000",
+        "--output",
+        "plain",
+        "--path",
+        log.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "2024-03-05T10:15:01.000Z INFO deploy started\n",
+            "2024-03-05T10:15:01.500Z INFO pulling image web:1.4.2\n",
+            "2024-03-05T10:15:02.000Z WARN registry slow\n",
+            "2024-03-05T10:15:03.000Z INFO image pulled\n",
+            "  layers: 7\n",
+        )
+    );
+}
+
+#[test]
+fn test_replay_merges_several_files_labeled_with_their_file() {
+    let directory = log_directory(&[
+        (
+            "api.log",
+            "2024-03-05T10:15:01Z api start\n2024-03-05T10:15:03Z api done\n",
+        ),
+        ("worker.log", "2024-03-05T10:15:02Z job 1\n"),
+    ]);
+
+    let output = run_splash_file_args(&[
+        "--replay",
+        "1000",
+        "--output",
+        "plain",
+        "--path",
+        directory.path().join("api.log").to_str().unwrap(),
+        directory.path().join("worker.log").to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "api.log 2024-03-05T10:15:01Z api start\n",
+            "worker.log 2024-03-05T10:15:02Z job 1\n",
+            "api.log 2024-03-05T10:15:03Z api done\n",
+        )
+    );
+}
+
+#[test]
+fn test_replay_reads_stdin() {
+    let output = run_splash_with_stdin_args(
+        &["--replay", "1000", "--output", "plain"],
+        "2024-03-05T10:15:01Z start\n2024-03-05T10:15:02Z done\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        "2024-03-05T10:15:01Z start\n2024-03-05T10:15:02Z done\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_replay_stops_when_interrupted_during_a_wait() {
+    let directory = log_directory(&[(
+        "slow.log",
+        "2024-03-05T10:15:01Z start\n2024-03-05T11:15:01Z an hour later\n",
+    )]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(["--replay", "--output", "plain", "--summary", "--path"])
+        .arg(directory.path().join("slow.log"))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 27];
+    stdout.read_exact(&mut first).unwrap();
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).unwrap();
+
+    assert_eq!(
+        (
+            child.wait().unwrap().success(),
+            String::from_utf8_lossy(&first).into_owned(),
+            rest.lines().take(3).collect::<Vec<&str>>().join("\n")
+        ),
+        (
+            true,
+            "2024-03-05T10:15:01Z start\n".to_string(),
+            "Summary\n=======\nLines:       1".to_string()
+        )
+    );
+}
+
+#[test]
+fn test_replay_refuses_the_curses_viewer_and_following() {
+    let log = example_path("replay_deploy.log");
+    let log = log.to_str().unwrap();
+    let curses = run_splash(&["--replay", "--output", "curses", "--path", log]).unwrap();
+    let follow = run_splash(&["--replay", "--follow", "--path", log]).unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&curses.stderr),
+        "Error: --replay cannot be combined with the curses viewer\n"
+    );
+    assert!(String::from_utf8_lossy(&follow.stderr)
+        .contains("'--replay [<SPEED>]' cannot be used with '--follow'"));
+}
+
+#[test]
+fn test_graph_writes_sparklines_in_place_of_the_lines() {
+    let log = example_path("graph_squid.log");
+    let output = run_splash_file_args(&[
+        "--graph",
+        "1m",
+        "--graph-field",
+        "duration",
+        "--mode",
+        "squid",
+        "--tz",
+        "UTC",
+        "--path",
+        log.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        output,
+        concat!(
+            "Graph per 1m\n",
+            "============\n",
+            "2021-03-03T00:00:00Z to 2021-03-03T00:03:00Z\n",
+            "lines             ▇▃▁█  max 4\n",
+            "errors            ▁▁▁█  max 2\n",
+            "average duration  ▃▂ █  max 1000\n",
+        )
+    );
+}
+
+#[test]
+fn test_graph_refuses_an_unknown_field_and_the_histogram() {
+    let log = example_path("graph_squid.log");
+    let log = log.to_str().unwrap();
+    let field = run_splash(&["--graph", "--graph-field", "latency", "--path", log]).unwrap();
+    let histogram = run_splash(&["--graph", "--histogram", "--path", log]).unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&field.stderr),
+        "Error: Unknown graph field 'latency'\n"
+    );
+    assert!(String::from_utf8_lossy(&histogram.stderr)
+        .contains("'--graph [<PERIOD>]' cannot be used with '--histogram [<PERIOD>]'"));
+}
+
+/// The bytes splash writes reading `input` with `args`, in the locale `lang`
+fn output_in_locale(args: &[&str], lang: &str, input: &[u8]) -> Vec<u8> {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_splash"))
+        .args(args)
+        .env_remove("LC_ALL")
+        .env_remove("LC_CTYPE")
+        .env("LANG", lang)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(input).unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    [output.stdout, output.stderr].concat()
+}
+
+const LATIN1_LINE: &[u8] = b"Oct  3 12:00:01 web01 app[42]: caf\xe9 ferm\xe9\n";
+
+#[test]
+fn test_a_latin1_log_is_read_and_written_in_latin1_when_asked_for() {
+    let log = example_path("latin1_syslog.log");
+    let args = ["--mode", "syslog", "--output", "plain", "--path"];
+
+    let asked = output_in_locale(
+        &[&args[..], &[log.to_str().unwrap(), "--encoding", "latin1"]].concat(),
+        "en_US.UTF-8",
+        b"",
+    );
+    let unasked = output_in_locale(
+        &[&args[..], &[log.to_str().unwrap()]].concat(),
+        "en_US.UTF-8",
+        b"",
+    );
+
+    assert_eq!(
+        (asked, String::from_utf8(unasked).unwrap()),
+        (
+            std::fs::read(&log).unwrap(),
+            "Oct  3 12:00:01 web01 app[42]: caf\u{fffd} ferm\u{fffd} pour Ren\u{fffd}e\n"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn test_a_latin1_locale_reads_stdin_in_latin1() {
+    let output = output_in_locale(
+        &["--mode", "syslog", "--output", "plain"],
+        "fr_FR.ISO-8859-1",
+        LATIN1_LINE,
+    );
+
+    assert_eq!(output, LATIN1_LINE);
+}
+
+#[test]
+fn test_json_and_html_output_are_utf8_in_a_latin1_locale() {
+    let json = output_in_locale(
+        &["--mode", "syslog", "--output", "json"],
+        "fr_FR.ISO-8859-1",
+        LATIN1_LINE,
+    );
+    let html = output_in_locale(
+        &["--mode", "syslog", "--output", "html"],
+        "fr_FR.ISO-8859-1",
+        LATIN1_LINE,
+    );
+
+    assert_eq!(
+        (
+            String::from_utf8(json).unwrap().contains("café fermé"),
+            String::from_utf8(html).unwrap().contains("café fermé")
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn test_a_graph_in_a_latin1_locale_is_drawn_in_ascii() {
+    let log = example_path("graph_squid.log");
+    let output = output_in_locale(
+        &[
+            "--graph",
+            "1m",
+            "--mode",
+            "squid",
+            "--tz",
+            "UTC",
+            "--path",
+            log.to_str().unwrap(),
+        ],
+        "fr_FR.ISO-8859-1",
+        b"",
+    );
+
+    assert!(String::from_utf8(output)
+        .unwrap()
+        .contains("lines   *-_#  max 4\n"));
+}
+
+#[test]
+fn test_an_unknown_encoding_is_refused() {
+    assert_eq!(
+        output_in_locale(&["--encoding", "ebcdic"], "en_US.UTF-8", b""),
+        b"Error: Unknown encoding 'ebcdic' (expected utf-8 or latin1)\n"
+    );
+}
+
+/// The words bash's completion offers for the last of `words`, with splash's
+/// bash completion script loaded
+fn bash_completes(words: &[&str]) -> Vec<String> {
+    let line = std::iter::once("splash")
+        .chain(words.iter().copied())
+        .map(|word| format!("'{}'", word))
+        .collect::<Vec<String>>()
+        .join(" ");
+    let program = format!(
+        concat!(
+            "eval \"$(\"$0\" --completions bash)\"\n",
+            "COMP_WORDS=({})\n",
+            "COMP_CWORD={}\n",
+            "_splash\n",
+            "printf '%s\\n' \"${{COMPREPLY[@]}}\"\n",
+        ),
+        line,
+        words.len()
+    );
+
+    let output = Command::new("bash")
+        .args(["-c", &program, env!("CARGO_BIN_EXE_splash")])
+        .current_dir(example_path(""))
+        .output()
+        .unwrap();
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn test_bash_completes_option_names() {
+    assert_eq!(
+        (bash_completes(&["--the"]), bash_completes(&["--graph"])),
+        (
+            vec!["--theme".to_string()],
+            vec!["--graph".to_string(), "--graph-field".to_string()]
+        )
+    );
+}
+
+#[test]
+fn test_bash_completes_the_values_of_options_that_take_one_of_a_set() {
+    assert_eq!(
+        [
+            bash_completes(&["--theme", "d"]),
+            bash_completes(&["-o", "js"]),
+            bash_completes(&["--mode", "sys"]),
+            bash_completes(&["--encoding", ""]),
+            bash_completes(&["--completions", "f"]),
+            bash_completes(&["--stats-format", "c"]),
+        ],
+        [
+            vec!["dark", "dracula"],
+            vec!["json", "jsonl"],
+            vec!["syslog", "systemd", "systemd-resolved"],
+            vec!["utf-8", "latin1"],
+            vec!["fish"],
+            vec!["csv"],
+        ]
+        .map(|words| words
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<String>>())
+    );
+}
+
+#[test]
+fn test_bash_completes_files_directories_and_nothing_for_free_values() {
+    assert_eq!(
+        [
+            bash_completes(&["--path", "learn_ord"]),
+            bash_completes(&["--plugin-dir", "../exam"]),
+            bash_completes(&["--plugin-dir", "learn_ord"]),
+            bash_completes(&["--listen", ""]),
+        ],
+        [
+            vec!["learn_orders.log".to_string()],
+            vec!["../examples".to_string()],
+            Vec::<String>::new(),
+            Vec::<String>::new(),
+        ]
+    );
+}
+
+#[test]
+fn test_completions_refuse_an_unknown_shell() {
+    let output = run_splash(&["--completions", "tcsh"]).unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Error: Unknown shell 'tcsh' (expected bash, zsh, or fish)\n"
+    );
+}
+
+#[test]
+fn test_man_writes_a_manual_page_listing_every_option() {
+    let output = run_splash(&["--man"]).unwrap();
+    let page = String::from_utf8_lossy(&output.stdout).into_owned();
+    let help = String::from_utf8_lossy(&run_splash(&["--help"]).unwrap().stdout).into_owned();
+    let longs: Vec<String> = help
+        .split_whitespace()
+        .filter(|word| word.starts_with("--"))
+        .map(|word| word.trim_end_matches(',').replace('-', "\\-"))
+        .collect();
+
+    assert_eq!(
+        (
+            page.starts_with(".TH SPLASH 1 "),
+            page.contains(&format!("\"splash {}\"", env!("CARGO_PKG_VERSION"))),
+            page.contains("\\fB\\-m, \\-\\-mode\\fR \\fIMODE\\fR\n"),
+            page.contains("\\fB\\-p, \\-\\-path\\fR \\fIPATH...\\fR\n"),
+            page.contains("\\fB\\-\\-graph\\fR \\fI[PERIOD]\\fR\n"),
+            longs
+                .iter()
+                .filter(|long| !page.contains(&format!("\\fB{}", long))
+                    && !page.contains(&format!(", {}", long)))
+                .cloned()
+                .collect::<Vec<String>>(),
+        ),
+        (true, true, true, true, true, Vec::<String>::new())
+    );
+}
+
+#[test]
+fn test_misspelled_values_are_refused_with_the_closest_name() {
+    let log = example_path("auth_sshd.log");
+    let log = log.to_str().unwrap();
+    let errors: Vec<String> = [
+        vec!["--mode", "sylog", "--path", log],
+        vec!["--output", "jsn", "--path", log],
+        vec!["--theme", "drakula", "--path", log],
+        vec!["--color", "timestmp=red", "--path", log],
+        vec!["--level", "eror", "--path", log],
+    ]
+    .iter()
+    .map(|args| {
+        let stderr = String::from_utf8_lossy(&run_splash(args).unwrap().stderr).into_owned();
+
+        stderr.rsplit(". ").next().unwrap().trim_end().to_string()
+    })
+    .collect();
+
+    assert_eq!(
+        errors,
+        [
+            "Did you mean 'syslog'?",
+            "Did you mean 'json'?",
+            "Did you mean 'dracula'?",
+            "Did you mean 'timestamp'?",
+            "Did you mean 'error'?",
+        ]
+    );
+}
+
+/// The option names a help text lists, such as `--mode`
+fn listed_options(help: &str) -> Vec<String> {
+    help.lines()
+        .filter(|line| {
+            line.starts_with("  ")
+                && line.trim_start().starts_with('-')
+                && !line.starts_with(&" ".repeat(10))
+        })
+        .filter_map(|line| {
+            line.split_whitespace()
+                .find(|word| word.starts_with("--"))
+                .map(|word| word.trim_end_matches(',').to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn test_short_help_lists_the_common_options_and_points_to_the_rest() {
+    let output = run_splash(&["-h"]).unwrap();
+    let help = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(
+        (
+            listed_options(&help),
+            help.trim_end().ends_with("--help lists every option.")
+        ),
+        (
+            [
+                "--help",
+                "--version",
+                "--mode",
+                "--auto",
+                "--path",
+                "--follow",
+                "--level",
+                "--since",
+                "--until",
+                "--grep",
+                "--exclude",
+                "--output",
+                "--theme",
+                "--list-plugins",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+            true
+        )
+    );
+}
+
+#[test]
+fn test_long_help_lists_every_option_under_headings() {
+    let output = run_splash(&["--help"]).unwrap();
+    let help = String::from_utf8_lossy(&output.stdout).into_owned();
+    let headings: Vec<&str> = help
+        .lines()
+        .filter(|line| line.ends_with(':') && !line.starts_with(' '))
+        .collect();
+
+    assert_eq!(
+        (headings, listed_options(&help).len()),
+        (
+            vec![
+                "Options:",
+                "Input:",
+                "Filters:",
+                "Output:",
+                "Colors:",
+                "Timestamps:",
+                "Reports:",
+                "Analysis:",
+                "Plugins:",
+                "Setup:",
+            ],
+            63
+        )
+    );
+}
+
+#[test]
+fn test_learn_writes_a_plugin_that_reads_the_sample_file() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let sample = example_path("learn_orders.log");
+    let learned = run_splash(&["--learn", "orders", "--path", sample.to_str().unwrap()]).unwrap();
+
+    std::fs::write(directory.path().join("orders.toml"), &learned.stdout).unwrap();
+
+    let tested = run_splash(&[
+        "--test-regex",
+        directory.path().join("orders.toml").to_str().unwrap(),
+        "--path",
+        sample.to_str().unwrap(),
+    ])
+    .unwrap();
+
+    assert!(learned.status.success());
+    assert!(String::from_utf8_lossy(&tested.stdout).ends_with("5 of 5 lines matched\n"));
+}
+
+#[test]
+fn test_learn_reads_sample_lines_from_stdin() {
+    let output = run_splash_with_stdin_args(&["--learn", "deploys"], "deploy 12 done\n").unwrap();
+
+    assert_eq!(
+        output,
+        "name = 'deploys'\ndescription = 'Learned from 1 sample line'\n\n[patterns]\nline = '^deploy\\s+(?P<number>\\d+)\\s+done$'\n"
+    );
+}
+
+#[test]
+fn test_learn_refuses_the_name_of_a_built_in_plugin() {
+    let sample = example_path("learn_orders.log");
+    let output = run_splash(&["--learn", "syslog", "--path", sample.to_str().unwrap()]).unwrap();
+
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        ),
+        (
+            Some(1),
+            "Error: 'syslog' is the name of a built-in plugin\n".to_string()
+        )
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_a_plugin_directory_that_cannot_be_read_does_not_stop_reloading() {
@@ -9197,6 +10259,29 @@ impl TerminalRun {
         self.keyboard.write_all(keys.as_bytes()).unwrap();
     }
 
+    /// Waits for splash to exit and returns everything it drew
+    fn finish_reading(&mut self) -> String {
+        let deadline = std::time::Instant::now() + VIEWER_DEADLINE;
+
+        while self.child.try_wait().unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "splash did not exit, showed {:?}",
+                self.drawn
+            );
+
+            if let Ok(chunk) = self.screen.recv_timeout(Duration::from_millis(20)) {
+                self.drawn.push_str(&String::from_utf8_lossy(&chunk));
+            }
+        }
+
+        while let Ok(chunk) = self.screen.recv_timeout(OUTPUT_QUIET_PERIOD) {
+            self.drawn.push_str(&String::from_utf8_lossy(&chunk));
+        }
+
+        self.drawn.clone()
+    }
+
     /// Waits for splash to exit, returning whether it succeeded
     fn finish(mut self) -> bool {
         let deadline = std::time::Instant::now() + VIEWER_DEADLINE;
@@ -9214,6 +10299,87 @@ impl TerminalRun {
             thread::sleep(Duration::from_millis(20));
         }
     }
+}
+
+/// What splash draws rendering the example access log in a terminal whose
+/// `TERM` is `term`, with `CLICOLOR_FORCE` set when `forced` is given
+#[cfg(unix)]
+fn drawn_in_terminal(term: &str, forced: Option<&str>, args: &[&str]) -> String {
+    let path = example_path("stats_access.log");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
+
+    command
+        .args(args)
+        .args(["--mode", "clf", "--path"])
+        .arg(&path)
+        .env("TERM", term)
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR")
+        .env_remove("CLICOLOR_FORCE");
+
+    if let Some(value) = forced {
+        command.env("CLICOLOR_FORCE", value);
+    }
+
+    let mut run = TerminalRun::run(command, None);
+    run.finish_reading()
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_dumb_terminal_is_written_no_colors_unless_they_are_forced() {
+    let escape = "\x1b[";
+
+    assert_eq!(
+        [
+            drawn_in_terminal("xterm-256color", None, &[]).contains(escape),
+            drawn_in_terminal("dumb", None, &[]).contains(escape),
+            drawn_in_terminal("dumb", Some("1"), &[]).contains(escape),
+        ],
+        [true, false, true]
+    );
+}
+
+#[test]
+fn test_hex_colors_are_written_as_the_nearest_ansi_colors_unless_the_terminal_shows_true_color() {
+    let path = example_path("stats_access.log");
+    let render = |colorterm: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_splash"));
+
+        command
+            .args(["--mode", "clf", "--theme", "solarized", "--path"])
+            .arg(&path)
+            .env("CLICOLOR_FORCE", "1")
+            .env_remove("COLORTERM");
+
+        if let Some(value) = colorterm {
+            command.env("COLORTERM", value);
+        }
+
+        String::from_utf8_lossy(&command.output().unwrap().stdout).into_owned()
+    };
+
+    let true_color = "\x1b[38;2;";
+
+    assert_eq!(
+        [
+            render(None).contains(true_color),
+            render(None).contains("\x1b["),
+            render(Some("truecolor")).contains(true_color),
+            render(Some("24bit")).contains(true_color),
+        ],
+        [false, true, true, true]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_the_viewer_refuses_a_dumb_terminal() {
+    assert!(
+        drawn_in_terminal("dumb", None, &["--output", "curses"]).contains(
+            "Error: curses output needs a terminal that can move the cursor, and TERM is dumb"
+        )
+    );
 }
 
 #[cfg(unix)]
@@ -9457,12 +10623,12 @@ fn test_html_line_numbers_number_every_input_line_including_blank_ones() {
     .unwrap();
 
     assert!(output.contains(
-        "<span class=\"splash-line-number\">1</span><span class=\"splash-plain\">service</span>"
+        "<span class=\"splash-line-number\" aria-hidden=\"true\">1</span><span class=\"splash-plain\">service</span>"
     ));
     assert!(output.contains(
-        "<span class=\"splash-line-number\">3</span><span class=\"splash-plain\">service</span>"
+        "<span class=\"splash-line-number\" aria-hidden=\"true\">3</span><span class=\"splash-plain\">service</span>"
     ));
-    assert!(!output.contains("<span class=\"splash-line-number\">2</span>"));
+    assert!(!output.contains("<span class=\"splash-line-number\" aria-hidden=\"true\">2</span>"));
 }
 
 #[test]

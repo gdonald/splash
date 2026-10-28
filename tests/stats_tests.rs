@@ -2,8 +2,8 @@ use splash::filter::Level;
 use splash::output::{ParsedLine, Token, TokenKind};
 use splash::parser::parse_line;
 use splash::stats::{
-    escape_csv, Bucket, Facts, Report, Stats, StatsError, StatsFormat, StatsOptions, StatsSettings,
-    BAR_WIDTH, DEFAULT_BUCKET, TOP_COUNT,
+    escape_csv, number, sparkline, sparkline_with, Bucket, Facts, Period, Report, Stats,
+    StatsError, StatsFormat, StatsOptions, StatsSettings, BAR_WIDTH, DEFAULT_BUCKET, TOP_COUNT,
 };
 use splash::zone::Zone;
 use std::path::PathBuf;
@@ -238,6 +238,7 @@ fn an_access_log_line_gives_its_request_facts() {
             request: true,
             url: Some("/index.html".to_string()),
             user_agent: Some("curl/8.4.0".to_string()),
+            value: None,
         }
     );
 }
@@ -653,5 +654,233 @@ fn csv_fields_holding_commas_quotes_or_line_breaks_are_quoted() {
             "\"two\nlines\"",
             "\"cr\rhere\""
         ]
+    );
+}
+
+/// Settings drawing a graph per minute in `format`, with the average of
+/// `field` when one is given
+fn graph(field: Option<&str>, format: &str) -> StatsSettings {
+    settings(StatsOptions {
+        graph: Some("1m".to_string()),
+        graph_field: field.map(str::to_string),
+        format: Some(format.to_string()),
+        ..StatsOptions::default()
+    })
+}
+
+/// The statistics of the example squid log, with its durations recorded
+fn graph_stats(settings: &StatsSettings) -> Stats {
+    let mut stats = Stats::default();
+
+    for line in example_contents("graph_squid.log").lines() {
+        stats.record(settings.facts(&parse_line(line, "squid").unwrap()));
+    }
+
+    stats
+}
+
+#[test]
+fn a_graph_replaces_the_lines() {
+    let graph = graph(None, "text");
+
+    assert_eq!(
+        (graph.report.clone(), graph.shows_lines()),
+        (
+            Report::Graph(Bucket {
+                name: "1m".to_string(),
+                seconds: 60
+            }),
+            false
+        )
+    );
+}
+
+#[test]
+fn a_graph_field_must_be_a_color_key() {
+    let error = StatsSettings::build_at(
+        &StatsOptions {
+            graph: Some("1m".to_string()),
+            graph_field: Some("latency".to_string()),
+            ..StatsOptions::default()
+        },
+        Zone::Utc,
+        Zone::Utc,
+        0,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        (error.clone(), error.to_string()),
+        (
+            StatsError::UnknownField("latency".to_string()),
+            "Unknown graph field 'latency'".to_string()
+        )
+    );
+}
+
+#[test]
+fn a_line_gives_the_number_its_graph_field_starts_with() {
+    let settings = graph(Some("duration"), "text");
+    let line = |text: &'static str| ParsedLine::new(vec![Token::new(text, TokenKind::Duration)]);
+
+    assert_eq!(
+        [
+            settings.facts(&line("\"0.250\"")).value,
+            settings.facts(&line("120ms")).value,
+            settings.facts(&line("-")).value,
+            graph(None, "text").facts(&line("120ms")).value,
+        ],
+        [Some(0.25), Some(120.0), None, None]
+    );
+}
+
+#[test]
+fn each_period_holds_its_lines_errors_and_average() {
+    let stats = graph_stats(&graph(Some("duration"), "text"));
+    let period = |start: &str, lines, errors, average| Period {
+        start: start.to_string(),
+        lines,
+        errors,
+        average,
+    };
+
+    assert_eq!(
+        stats.periods(60, &Zone::Utc),
+        vec![
+            period("2021-03-03T00:00:00Z", 3, 0, Some(200.0)),
+            period("2021-03-03T00:01:00Z", 1, 0, Some(50.0)),
+            period("2021-03-03T00:02:00Z", 0, 0, None),
+            period("2021-03-03T00:03:00Z", 4, 2, Some(1000.0)),
+        ]
+    );
+}
+
+#[test]
+fn a_sparkline_scales_its_values_to_the_largest_and_leaves_a_space_for_none() {
+    assert_eq!(
+        (
+            sparkline(&[Some(0.0), Some(1.0), Some(3.0), None, Some(4.0)]),
+            sparkline(&[Some(0.0), Some(0.0)]),
+            sparkline(&[Some(-2.0), Some(2.0)]),
+        ),
+        ("▁▃▇ █".to_string(), "▁▁".to_string(), "▁█".to_string())
+    );
+}
+
+#[test]
+fn numbers_are_written_without_trailing_zeros() {
+    assert_eq!(
+        [number(1000.0), number(361.6666), number(0.25)],
+        ["1000", "361.667", "0.25"]
+    );
+}
+
+#[test]
+fn the_graph_is_written_as_text_with_a_sparkline_for_each_series() {
+    let settings = graph(Some("duration"), "text");
+
+    assert_eq!(
+        settings.report(&graph_stats(&settings)).unwrap(),
+        concat!(
+            "Graph per 1m\n",
+            "============\n",
+            "2021-03-03T00:00:00Z to 2021-03-03T00:03:00Z\n",
+            "lines             ▇▃▁█  max 4\n",
+            "errors            ▁▁▁█  max 2\n",
+            "average duration  ▃▂ █  max 1000\n",
+        )
+    );
+}
+
+#[test]
+fn a_graph_field_no_line_holds_has_no_maximum() {
+    let settings = graph(Some("email"), "text");
+
+    assert!(settings
+        .report(&graph_stats(&settings))
+        .unwrap()
+        .ends_with(&format!("average email  {}  max -\n", " ".repeat(4))));
+}
+
+#[test]
+fn a_graph_without_timestamps_has_only_its_title() {
+    assert_eq!(
+        graph(None, "text").report(&untimed_stats()).unwrap(),
+        "Graph per 1m\n============\n"
+    );
+}
+
+#[test]
+fn the_graph_is_written_as_json() {
+    let with_field = graph(Some("duration"), "json");
+    let without_field = graph(None, "json");
+
+    assert_eq!(
+        (
+            with_field.report(&graph_stats(&with_field)).unwrap(),
+            without_field.report(&graph_stats(&without_field)).unwrap()
+        ),
+        (
+            concat!(
+                r#"{"bucket":"1m","buckets":["#,
+                r#"{"start":"2021-03-03T00:00:00Z","lines":3,"errors":0,"average_duration":200},"#,
+                r#"{"start":"2021-03-03T00:01:00Z","lines":1,"errors":0,"average_duration":50},"#,
+                r#"{"start":"2021-03-03T00:02:00Z","lines":0,"errors":0,"average_duration":null},"#,
+                r#"{"start":"2021-03-03T00:03:00Z","lines":4,"errors":2,"average_duration":1000}]}"#,
+                "\n"
+            )
+            .to_string(),
+            concat!(
+                r#"{"bucket":"1m","buckets":["#,
+                r#"{"start":"2021-03-03T00:00:00Z","lines":3,"errors":0},"#,
+                r#"{"start":"2021-03-03T00:01:00Z","lines":1,"errors":0},"#,
+                r#"{"start":"2021-03-03T00:02:00Z","lines":0,"errors":0},"#,
+                r#"{"start":"2021-03-03T00:03:00Z","lines":4,"errors":2}]}"#,
+                "\n"
+            )
+            .to_string()
+        )
+    );
+}
+
+#[test]
+fn the_graph_is_written_as_csv() {
+    let with_field = graph(Some("duration"), "csv");
+    let without_field = graph(None, "csv");
+
+    assert_eq!(
+        (
+            with_field.report(&graph_stats(&with_field)).unwrap(),
+            without_field.report(&graph_stats(&without_field)).unwrap()
+        ),
+        (
+            concat!(
+                "start,lines,errors,average_duration\n",
+                "2021-03-03T00:00:00Z,3,0,200\n",
+                "2021-03-03T00:01:00Z,1,0,50\n",
+                "2021-03-03T00:02:00Z,0,0,\n",
+                "2021-03-03T00:03:00Z,4,2,1000\n",
+            )
+            .to_string(),
+            concat!(
+                "start,lines,errors\n",
+                "2021-03-03T00:00:00Z,3,0\n",
+                "2021-03-03T00:01:00Z,1,0\n",
+                "2021-03-03T00:02:00Z,0,0\n",
+                "2021-03-03T00:03:00Z,4,2\n",
+            )
+            .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_sparkline_for_latin1_output_is_drawn_in_ascii() {
+    assert_eq!(
+        sparkline_with(
+            &[Some(0.0), Some(1.0), Some(4.0), None],
+            splash::source::Encoding::Latin1
+        ),
+        "_-# "
     );
 }

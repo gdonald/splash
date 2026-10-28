@@ -6,10 +6,14 @@
 /// and plain text for scripting.
 use crate::json;
 use crate::logfmt;
+use crate::suggest;
 use crate::theme::Theme;
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
+
+/// The names `--output` accepts, as `--help` lists them
+pub const OUTPUT_NAMES: [&str; 7] = ["ansi", "csv", "curses", "html", "json", "jsonl", "plain"];
 
 /// The style assigned to a token by the parser
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +151,11 @@ impl TokenKind {
             .find(|kind| kind.name() == name)
     }
 
+    /// The machine-readable name of every style, in declaration order
+    pub fn names() -> [&'static str; TokenKind::COUNT] {
+        TokenKind::all().map(|kind| kind.name())
+    }
+
     /// Every style, in declaration order
     pub fn all() -> [TokenKind; TokenKind::COUNT] {
         [
@@ -273,8 +282,9 @@ impl fmt::Display for UnknownOutputMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Unknown output mode '{}' (expected ansi, csv, curses, html, json, jsonl, or plain)",
-            self.0
+            "Unknown output mode '{}' (expected ansi, csv, curses, html, json, jsonl, or plain){}",
+            self.0,
+            suggest::hint(&self.0, OUTPUT_NAMES)
         )
     }
 }
@@ -679,7 +689,7 @@ pub const LINE_NUMBER_CLASS: &str = "splash-line-number";
 /// A line of HTML output after its line number
 pub fn number_html_line(number: usize, html: &str) -> String {
     format!(
-        "<span class=\"{}\">{}</span>{}",
+        "<span class=\"{}\" aria-hidden=\"true\">{}</span>{}",
         LINE_NUMBER_CLASS, number, html
     )
 }
@@ -718,7 +728,8 @@ fn html_header(theme: &Theme, css: Option<&str>) -> String {
          </style>\n\
          </head>\n\
          <body>\n\
-         <pre class=\"splash\">\n",
+         <main>\n\
+         <pre class=\"splash\" role=\"log\" aria-label=\"Log lines\">\n",
         theme.background().css(),
         theme.foreground().css(),
         LINE_NUMBER_CLASS,
@@ -737,5 +748,5 @@ fn custom_css(css: &str) -> String {
 }
 
 fn html_footer() -> String {
-    "</pre>\n</body>\n</html>\n".to_string()
+    "</pre>\n</main>\n</body>\n</html>\n".to_string()
 }

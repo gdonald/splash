@@ -3,11 +3,14 @@
 //! `--stats` writes a report on the lines a run keeps in place of the lines:
 //! the counts, the time range, the levels, the status codes, and the
 //! addresses, URLs, and user agents seen most. `--summary` writes the counts
-//! and time range after the lines, and `--histogram` writes the number of
-//! lines in each period of time in place of the lines. `--stats-format`
-//! writes any of them as text, JSON, or CSV.
+//! and time range after the lines, `--histogram` writes the number of lines
+//! in each period of time in place of the lines, and `--graph` writes
+//! sparklines of the lines, the errors, and the average of a field in each
+//! period. `--stats-format` writes any of them as text, JSON, or CSV.
 use crate::filter::Level;
 use crate::output::{escape_json, ParsedLine, TokenKind};
+use crate::source::Encoding;
+use crate::suggest;
 use crate::time;
 use crate::zone::Zone;
 use regex::Regex;
@@ -25,6 +28,17 @@ pub const BAR_WIDTH: u64 = 40;
 /// The period a histogram bar covers when `--histogram` names none
 pub const DEFAULT_BUCKET: &str = "1h";
 
+/// The marks a sparkline draws, lowest first
+pub const SPARKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// The marks a sparkline draws when stdout is Latin-1, which has no block
+/// characters
+pub const ASCII_SPARKS: [char; 8] = ['_', '.', '-', ':', '=', '+', '*', '#'];
+
+/// The number a field's text starts with
+static LEADING_NUMBER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[-+]?\d+(?:\.\d+)?").unwrap());
+
 /// A histogram period, such as `30s`, `5m`, `1h`, or `1d`
 static BUCKET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)([smhd])$").unwrap());
 
@@ -36,6 +50,7 @@ static ADDRESS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d{1,3}(?:\.\d{1
 pub enum StatsError {
     UnknownFormat(String),
     BadBucket(String),
+    UnknownField(String),
 }
 
 impl fmt::Display for StatsError {
@@ -43,13 +58,20 @@ impl fmt::Display for StatsError {
         match self {
             StatsError::UnknownFormat(name) => write!(
                 f,
-                "Unknown statistics format '{}' (expected text, json, or csv)",
-                name
+                "Unknown statistics format '{}' (expected text, json, or csv){}",
+                name,
+                suggest::hint(name, ["text", "json", "csv"])
             ),
             StatsError::BadBucket(value) => write!(
                 f,
                 "Invalid histogram period '{}' (expected a count and a unit, such as 30s, 5m, 1h, or 1d)",
                 value
+            ),
+            StatsError::UnknownField(name) => write!(
+                f,
+                "Unknown graph field '{}'{}",
+                name,
+                suggest::hint(name, TokenKind::names())
             ),
         }
     }
@@ -121,6 +143,9 @@ pub enum Report {
     Stats,
     /// The number of lines in each period of time
     Histogram(Bucket),
+    /// Sparklines of the lines, the errors, and a field's average in each
+    /// period of time
+    Graph(Bucket),
 }
 
 /// The statistics options given on the command line
@@ -129,6 +154,8 @@ pub struct StatsOptions {
     pub stats: bool,
     pub summary: bool,
     pub histogram: Option<String>,
+    pub graph: Option<String>,
+    pub graph_field: Option<String>,
     pub format: Option<String>,
 }
 
@@ -136,6 +163,8 @@ pub struct StatsOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatsSettings {
     pub report: Report,
+    /// The field whose average `--graph` draws
+    pub graph_field: Option<TokenKind>,
     pub summary: bool,
     pub format: StatsFormat,
     /// The zone a timestamp with no zone of its own is read in
@@ -174,14 +203,24 @@ impl StatsSettings {
         display: Zone,
         now: i64,
     ) -> Result<Self, StatsError> {
-        let report = match (&options.histogram, options.stats) {
-            (Some(bucket), _) => Report::Histogram(bucket.parse()?),
-            (None, true) => Report::Stats,
-            (None, false) => Report::Lines,
+        let report = match (&options.histogram, &options.graph, options.stats) {
+            (Some(bucket), _, _) => Report::Histogram(bucket.parse()?),
+            (None, Some(bucket), _) => Report::Graph(bucket.parse()?),
+            (None, None, true) => Report::Stats,
+            (None, None, false) => Report::Lines,
+        };
+
+        let graph_field = match options.graph_field.as_deref() {
+            Some(name) => Some(
+                TokenKind::from_name(name)
+                    .ok_or_else(|| StatsError::UnknownField(name.to_string()))?,
+            ),
+            None => None,
         };
 
         Ok(StatsSettings {
             report,
+            graph_field,
             summary: options.summary,
             format: options.format.as_deref().unwrap_or("text").parse()?,
             source,
@@ -202,7 +241,10 @@ impl StatsSettings {
 
     /// The facts the statistics need from a kept line
     pub fn facts(&self, parsed: &ParsedLine) -> Facts {
-        Facts::of(parsed, &self.source, self.now)
+        Facts {
+            value: self.graph_field.and_then(|kind| field_value(parsed, kind)),
+            ..Facts::of(parsed, &self.source, self.now)
+        }
     }
 
     /// The report written in place of the lines, if the run writes one
@@ -215,6 +257,7 @@ impl StatsSettings {
                 &stats.tables(),
             )),
             Report::Histogram(bucket) => Some(self.histogram(stats, bucket)),
+            Report::Graph(bucket) => Some(self.graph(stats, bucket)),
         }
     }
 
@@ -286,8 +329,128 @@ impl StatsSettings {
     }
 }
 
+impl StatsSettings {
+    fn graph(&self, stats: &Stats, bucket: &Bucket) -> String {
+        let periods = stats.periods(bucket.seconds, &self.display);
+        let average = self
+            .graph_field
+            .map(|kind| format!("average_{}", kind.name()));
+
+        match self.format {
+            StatsFormat::Text => {
+                let title = format!("Graph per {}", bucket.name);
+                let mut text = format!("{}\n{}\n", title, "=".repeat(title.len()));
+
+                let (Some(first), Some(last)) = (periods.first(), periods.last()) else {
+                    return text;
+                };
+
+                text.push_str(&format!("{} to {}\n", first.start, last.start));
+
+                let mut rows: Vec<(String, Vec<Option<f64>>)> = vec![
+                    (
+                        "lines".to_string(),
+                        periods
+                            .iter()
+                            .map(|period| Some(period.lines as f64))
+                            .collect(),
+                    ),
+                    (
+                        "errors".to_string(),
+                        periods
+                            .iter()
+                            .map(|period| Some(period.errors as f64))
+                            .collect(),
+                    ),
+                ];
+
+                if let Some(kind) = self.graph_field {
+                    rows.push((
+                        format!("average {}", kind.name()),
+                        periods.iter().map(|period| period.average).collect(),
+                    ));
+                }
+
+                let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+
+                for (label, values) in &rows {
+                    let most = values.iter().flatten().copied().reduce(f64::max);
+
+                    text.push_str(&format!(
+                        "{:<width$}  {}  max {}\n",
+                        label,
+                        sparkline(values),
+                        most.map_or("-".to_string(), number),
+                        width = width
+                    ));
+                }
+
+                text
+            }
+            StatsFormat::Json => {
+                let periods: Vec<String> = periods
+                    .iter()
+                    .map(|period| {
+                        let mut fields = format!(
+                            "\"start\":\"{}\",\"lines\":{},\"errors\":{}",
+                            escape_json(&period.start),
+                            period.lines,
+                            period.errors
+                        );
+
+                        if let Some(key) = &average {
+                            fields.push_str(&format!(
+                                ",\"{}\":{}",
+                                key,
+                                period.average.map_or("null".to_string(), number)
+                            ));
+                        }
+
+                        format!("{{{}}}", fields)
+                    })
+                    .collect();
+
+                format!(
+                    "{{\"bucket\":\"{}\",\"buckets\":[{}]}}\n",
+                    escape_json(&bucket.name),
+                    periods.join(",")
+                )
+            }
+            StatsFormat::Csv => {
+                let mut csv = String::from("start,lines,errors");
+
+                if let Some(key) = &average {
+                    csv.push_str(&format!(",{}", key));
+                }
+
+                csv.push('\n');
+
+                for period in &periods {
+                    csv.push_str(&format!(
+                        "{},{},{}",
+                        escape_csv(&period.start),
+                        period.lines,
+                        period.errors
+                    ));
+
+                    if average.is_some() {
+                        csv.push_str(&format!(
+                            ",{}",
+                            period.average.map_or(String::new(), number)
+                        ));
+                    }
+
+                    csv.push('\n');
+                }
+
+                csv
+            }
+        }
+    }
+}
+
 /// What the statistics read from one kept line
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
     pub level: Option<Level>,
     pub moment: Option<i64>,
@@ -298,6 +461,8 @@ pub struct Facts {
     /// The URL of a request
     pub url: Option<String>,
     pub user_agent: Option<String>,
+    /// The number the `--graph-field` field starts with
+    pub value: Option<f64>,
 }
 
 impl Facts {
@@ -339,6 +504,7 @@ impl Facts {
             request,
             url: first(TokenKind::Request).filter(|_| request),
             user_agent: first(TokenKind::UserAgent),
+            value: None,
         }
     }
 
@@ -355,7 +521,7 @@ impl Facts {
 }
 
 /// Counts of the lines a run has kept
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Stats {
     pub lines: u64,
     pub errors: u64,
@@ -369,19 +535,47 @@ pub struct Stats {
     pub user_agents: HashMap<String, u64>,
     /// The number of lines written at each second
     pub moments: BTreeMap<i64, u64>,
+    /// The number of errors written at each second
+    pub error_moments: BTreeMap<i64, u64>,
+    /// The sum and count of the `--graph-field` values written at each
+    /// second
+    pub values: BTreeMap<i64, (f64, u64)>,
+}
+
+/// The counts of one period of a graph
+#[derive(Debug, Clone, PartialEq)]
+pub struct Period {
+    /// The start of the period, as RFC 3339
+    pub start: String,
+    pub lines: u64,
+    pub errors: u64,
+    /// The average of the `--graph-field` values, if the period has any
+    pub average: Option<f64>,
 }
 
 impl Stats {
     /// Counts one kept line
     pub fn record(&mut self, facts: Facts) {
+        let error = facts.is_error();
+
         self.lines += 1;
-        self.errors += u64::from(facts.is_error());
+        self.errors += u64::from(error);
         self.requests += u64::from(facts.request);
 
         if let Some(moment) = facts.moment {
             self.first = Some(self.first.map_or(moment, |first| first.min(moment)));
             self.last = Some(self.last.map_or(moment, |last| last.max(moment)));
             *self.moments.entry(moment).or_default() += 1;
+
+            if error {
+                *self.error_moments.entry(moment).or_default() += 1;
+            }
+
+            if let Some(value) = facts.value {
+                let (sum, count) = self.values.entry(moment).or_default();
+                *sum += value;
+                *count += 1;
+            }
         }
 
         if let Some(level) = facts.level {
@@ -421,24 +615,49 @@ impl Stats {
     /// starting on the wall clock of `zone` and labeled with their start,
     /// from the first period with a timestamp to the last
     pub fn buckets(&self, seconds: i64, zone: &Zone) -> Vec<(String, u64)> {
-        let mut counts: BTreeMap<i64, u64> = BTreeMap::new();
+        self.periods(seconds, zone)
+            .into_iter()
+            .map(|period| (period.start, period.lines))
+            .collect()
+    }
+
+    /// The lines, errors, and average `--graph-field` value of each period
+    /// of `seconds`, as `buckets` divides them
+    pub fn periods(&self, seconds: i64, zone: &Zone) -> Vec<Period> {
+        let start_of = |moment: i64| {
+            let local = moment + zone.offset_at(moment);
+            local - local.rem_euclid(seconds)
+        };
+
+        let mut lines: BTreeMap<i64, u64> = BTreeMap::new();
+        let mut errors: BTreeMap<i64, u64> = BTreeMap::new();
+        let mut values: BTreeMap<i64, (f64, u64)> = BTreeMap::new();
 
         for (moment, count) in &self.moments {
-            let local = moment + zone.offset_at(*moment);
-            *counts.entry(local - local.rem_euclid(seconds)).or_default() += count;
+            *lines.entry(start_of(*moment)).or_default() += count;
         }
 
-        let (Some(first), Some(last)) = (counts.keys().next(), counts.keys().next_back()) else {
+        for (moment, count) in &self.error_moments {
+            *errors.entry(start_of(*moment)).or_default() += count;
+        }
+
+        for (moment, (sum, count)) in &self.values {
+            let (total, number) = values.entry(start_of(*moment)).or_default();
+            *total += sum;
+            *number += count;
+        }
+
+        let (Some(first), Some(last)) = (lines.keys().next(), lines.keys().next_back()) else {
             return Vec::new();
         };
 
         (*first..=*last)
             .step_by(seconds as usize)
-            .map(|start| {
-                (
-                    time::format_rfc3339(zone.to_utc(start), None, zone),
-                    counts.get(&start).copied().unwrap_or(0),
-                )
+            .map(|start| Period {
+                start: time::format_rfc3339(zone.to_utc(start), None, zone),
+                lines: lines.get(&start).copied().unwrap_or(0),
+                errors: errors.get(&start).copied().unwrap_or(0),
+                average: values.get(&start).map(|(sum, count)| sum / *count as f64),
             })
             .collect()
     }
@@ -512,6 +731,53 @@ impl Stats {
             ),
         ]
     }
+}
+
+/// The number the text of a line's first field of `kind` starts with
+fn field_value(parsed: &ParsedLine, kind: TokenKind) -> Option<f64> {
+    let token = parsed.tokens.iter().find(|token| token.kind == kind)?;
+    let number = LEADING_NUMBER.find(token.text.trim_matches('"'))?;
+
+    number.as_str().parse().ok()
+}
+
+/// One mark for each value, scaled so the largest is the highest mark, and
+/// a space for a period with no value
+pub fn sparkline(values: &[Option<f64>]) -> String {
+    sparkline_with(values, crate::source::output_encoding())
+}
+
+/// A sparkline drawn with the marks `encoding` can write
+pub fn sparkline_with(values: &[Option<f64>], encoding: Encoding) -> String {
+    let marks = match encoding {
+        Encoding::Utf8 => SPARKS,
+        Encoding::Latin1 => ASCII_SPARKS,
+    };
+    let most = values
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |most, value| most.max(*value));
+
+    values
+        .iter()
+        .map(|value| match value {
+            None => ' ',
+            Some(_) if most <= 0.0 => marks[0],
+            Some(value) => {
+                let height = (value.max(0.0) / most * (marks.len() - 1) as f64).ceil();
+
+                marks[height as usize]
+            }
+        })
+        .collect()
+}
+
+/// A number as reports write it: whole numbers without a fraction, and
+/// others to at most three decimal places
+pub fn number(value: f64) -> String {
+    let text = format!("{:.3}", value);
+
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The most frequent values, most frequent first and ties in value order

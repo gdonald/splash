@@ -247,9 +247,19 @@ fn test_describe_plugins_reports_a_poisoned_registry_as_locked() {
 
 #[test]
 fn test_plugin_not_found_error_names_the_plugin() {
-    let error = RegistryError::PluginNotFound("syslog".to_string());
+    let error = RegistryError::PluginNotFound("orders".to_string());
 
-    assert_eq!(error.to_string(), "Plugin 'syslog' not found");
+    assert_eq!(error.to_string(), "Plugin 'orders' not found");
+}
+
+#[test]
+fn test_plugin_not_found_error_suggests_the_closest_mode() {
+    let error = RegistryError::PluginNotFound("sylog".to_string());
+
+    assert_eq!(
+        error.to_string(),
+        "Plugin 'sylog' not found. Did you mean 'syslog'?"
+    );
 }
 
 #[test]

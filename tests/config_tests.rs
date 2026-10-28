@@ -1034,7 +1034,7 @@ fn the_curses_viewer_cannot_show_statistics() {
     assert_eq!(error, ConfigError::StatsInViewer);
     assert_eq!(
         error.to_string(),
-        "The curses viewer cannot show --stats, --summary, or --histogram"
+        "The curses viewer cannot show --stats, --summary, --histogram, or --graph"
     );
 }
 
@@ -1236,4 +1236,30 @@ fn line_numbers_are_off_unless_asked_for() {
 
     assert!(!resolved.line_numbers);
     assert_eq!(resolved.css, None);
+}
+
+#[test]
+fn an_unknown_mode_is_refused_with_the_closest_mode() {
+    let options = Options {
+        mode: Some("sylog".to_string()),
+        ..Options::default()
+    };
+    let error = resolve_with("", options).unwrap_err();
+
+    assert_eq!(
+        (error.clone(), error.to_string()),
+        (
+            ConfigError::UnknownMode("sylog".to_string()),
+            "Unknown mode 'sylog' (expected a mode --list-plugins lists). Did you mean 'syslog'?"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_mode_in_the_config_file_must_be_known_too() {
+    assert_eq!(
+        resolve_with("mode = \"nginx\"\n", Options::default()).unwrap_err(),
+        ConfigError::UnknownMode("nginx".to_string())
+    );
 }

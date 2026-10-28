@@ -65,6 +65,7 @@ fn plain_settings() -> Settings {
         fields: Vec::new(),
         anonymizer: None,
         source: None,
+        marker: None,
         plugin_themes: Default::default(),
         css: None,
         line_numbers: false,

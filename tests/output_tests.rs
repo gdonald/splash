@@ -202,7 +202,7 @@ fn only_html_output_has_a_header() {
 fn only_html_output_has_a_footer() {
     assert_eq!(
         OutputMode::Html.footer(),
-        Some("</pre>\n</body>\n</html>\n".to_string())
+        Some("</pre>\n</main>\n</body>\n</html>\n".to_string())
     );
     assert!(OutputMode::Ansi.footer().is_none());
     assert!(OutputMode::Curses.footer().is_none());
@@ -215,7 +215,31 @@ fn the_html_header_opens_a_document_and_a_preformatted_block() {
     let header = OutputMode::Html.header(&Theme::default()).unwrap();
 
     assert!(header.starts_with("<!DOCTYPE html>\n"));
-    assert!(header.ends_with("<pre class=\"splash\">\n"));
+    assert!(header.ends_with("<pre class=\"splash\" role=\"log\" aria-label=\"Log lines\">\n"));
+}
+
+#[test]
+fn the_html_log_is_a_labeled_log_region_in_the_main_landmark() {
+    let header = OutputMode::Html.header(&Theme::default()).unwrap();
+    let footer = OutputMode::Html.footer().unwrap();
+
+    assert_eq!(
+        (
+            header.ends_with(
+                "<body>\n<main>\n<pre class=\"splash\" role=\"log\" aria-label=\"Log lines\">\n"
+            ),
+            footer.starts_with("</pre>\n</main>\n"),
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn html_line_numbers_are_hidden_from_screen_readers() {
+    assert_eq!(
+        splash::output::number_html_line(7, "text"),
+        "<span class=\"splash-line-number\" aria-hidden=\"true\">7</span>text"
+    );
 }
 
 #[test]
@@ -554,7 +578,7 @@ fn a_style_sheet_is_added_to_the_html_header_after_the_theme_rules() {
         .unwrap();
 
     assert!(header.ends_with(
-        "    .splash-source { color: #0000aa; font-weight: bold; }\npre.splash { font-size: 14px; }\n</style>\n</head>\n<body>\n<pre class=\"splash\">\n"
+        "    .splash-source { color: #0000aa; font-weight: bold; }\npre.splash { font-size: 14px; }\n</style>\n</head>\n<body>\n<main>\n<pre class=\"splash\" role=\"log\" aria-label=\"Log lines\">\n"
     ), "{}", header);
 }
 
@@ -592,7 +616,7 @@ fn the_html_header_styles_line_numbers_so_copying_leaves_them_out() {
 fn a_numbered_html_line_starts_with_its_number() {
     assert_eq!(
         output::number_html_line(42, "<span class=\"splash-plain\">a</span>"),
-        "<span class=\"splash-line-number\">42</span><span class=\"splash-plain\">a</span>"
+        "<span class=\"splash-line-number\" aria-hidden=\"true\">42</span><span class=\"splash-plain\">a</span>"
     );
 }
 

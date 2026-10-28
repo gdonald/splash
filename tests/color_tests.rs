@@ -233,3 +233,19 @@ fn every_color_keeps_the_text_it_colorizes() {
         );
     }
 }
+
+#[test]
+fn a_dumb_terminal_shows_no_colors_unless_they_are_forced() {
+    use splash::color::terminal_shows_colors;
+
+    assert_eq!(
+        [
+            terminal_shows_colors(Some("xterm-256color"), None),
+            terminal_shows_colors(None, None),
+            terminal_shows_colors(Some("dumb"), None),
+            terminal_shows_colors(Some("dumb"), Some("0")),
+            terminal_shows_colors(Some("dumb"), Some("1")),
+        ],
+        [true, true, false, false, true]
+    );
+}

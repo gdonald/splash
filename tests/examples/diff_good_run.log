@@ -1,0 +1,8 @@
+2024-03-05T10:15:01Z INFO deploy 0f8fad5b-d9cb-469f-a165-70867728950e started
+2024-03-05T10:15:02Z INFO pulling image web:1.4.2
+2024-03-05T10:15:09Z INFO image pulled
+2024-03-05T10:15:10Z INFO migrating database
+2024-03-05T10:15:14Z INFO migrations applied
+2024-03-05T10:15:15Z INFO starting 3 replicas
+2024-03-05T10:15:20Z INFO replicas healthy
+2024-03-05T10:15:21Z INFO deploy finished

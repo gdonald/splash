@@ -47,6 +47,7 @@ pub enum ConfigError {
     NeedsHtml(&'static str),
     UnknownField(String),
     BadEnabled { plugin: String, value: String },
+    UnknownMode(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -90,12 +91,29 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::StatsInViewer => write!(
                 f,
-                "The curses viewer cannot show --stats, --summary, or --histogram"
+                "The curses viewer cannot show --stats, --summary, --histogram, or --graph"
             ),
+            ConfigError::UnknownMode(name) => {
+                let mut modes = registry::mode_names();
+                modes.extend(registry::builtins().list_plugins().unwrap_or_default());
+
+                write!(
+                    f,
+                    "Unknown mode '{}' (expected a mode --list-plugins lists){}",
+                    name,
+                    crate::suggest::hint(name, modes.iter().map(String::as_str))
+                )
+            }
             ConfigError::UnknownField(name) => write!(
                 f,
-                "Unknown field '{}' (expected text or a color key, such as status)",
-                name
+                "Unknown field '{}' (expected text or a color key, such as status){}",
+                name,
+                crate::suggest::hint(
+                    name,
+                    [output::TEXT_FIELD, output::RECORD_FIELD]
+                        .into_iter()
+                        .chain(TokenKind::names())
+                )
             ),
         }
     }
@@ -437,6 +455,9 @@ pub struct Settings {
     /// The name each line is labeled with, when lines of several files are
     /// merged
     pub source: Option<String>,
+    /// The mark each line starts with and its style, such as the `+` of a
+    /// line a diff adds
+    pub marker: Option<(String, TokenKind)>,
     /// The theme of each plugin the config sets colors for, used in place
     /// of `theme` when that plugin's mode is chosen or detected
     pub plugin_themes: BTreeMap<String, Theme>,
@@ -500,6 +521,10 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_MODE.to_string());
         let mode = registry::canonical_mode(&mode).to_string();
 
+        if !registry::is_builtin(&mode) && !registry::builtins().contains(&mode) {
+            return Err(ConfigError::UnknownMode(mode));
+        }
+
         let output = options
             .output
             .clone()
@@ -542,6 +567,7 @@ impl Settings {
             fields: resolve_fields(&options.fields)?,
             anonymizer: options.anonymize.then(Anonymizer::new),
             source: None,
+            marker: None,
             plugin_themes,
             css,
             line_numbers: options.line_numbers,

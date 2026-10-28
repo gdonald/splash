@@ -1,0 +1,8 @@
+1614729600.100    100 10.0.0.5 TCP_MISS/200 4512 GET http://example.com/ - HIER_DIRECT/93.184.216.34 text/html
+1614729610.200    200 10.0.0.6 TCP_MISS/200 4512 GET http://example.com/a - HIER_DIRECT/93.184.216.34 text/html
+1614729650.300    300 10.0.0.7 TCP_MISS/200 4512 GET http://example.com/b - HIER_DIRECT/93.184.216.34 text/html
+1614729665.000     50 10.0.0.5 TCP_MEM_HIT/200 8810 GET http://example.com/app.css - NONE/- text/css
+1614729781.000   1000 10.0.0.8 TCP_MISS/503 120 GET http://example.com/api - HIER_DIRECT/93.184.216.34 text/html
+1614729782.000   1000 10.0.0.8 TCP_MISS/503 120 GET http://example.com/api - HIER_DIRECT/93.184.216.34 text/html
+1614729790.000    800 10.0.0.9 TCP_MISS/200 4512 GET http://example.com/c - HIER_DIRECT/93.184.216.34 text/html
+1614729799.000   1200 10.0.0.9 TCP_MISS/200 4512 GET http://example.com/d - HIER_DIRECT/93.184.216.34 text/html

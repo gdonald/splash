@@ -355,7 +355,7 @@ pub fn serve_syslog<R: Read>(stream: R, lines: &Lines) -> io::Result<()> {
 
 /// Sends each line of a message
 fn send_message(bytes: &[u8], lines: &Lines) -> Result<(), SendError<Received>> {
-    String::from_utf8_lossy(bytes)
+    crate::source::decode(bytes)
         .lines()
         .try_for_each(|line| lines.send(line.to_string()))
 }

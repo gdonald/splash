@@ -1,24 +1,32 @@
-use clap::{ArgGroup, Parser};
+use clap::{ArgGroup, CommandFactory, Parser};
 use crossterm::event;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute, terminal};
 use notify::{Config as WatchConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use splash::alert::{Notifier, Patterns, Targets};
 use splash::cloudwatch::{self, Connection, Query};
+use splash::color;
+use splash::completions::{self, Completed, Shell, Values};
 use splash::config::{Config, Options, Profiles, Settings};
+use splash::correlate;
 use splash::dates::DateOptions;
 use splash::detect;
+use splash::diff;
 use splash::discovery::PluginDiscovery;
 use splash::external::{self, PluginSet, TomlPlugin};
 use splash::filter::{Entry, FilterOptions};
 use splash::forward::{Destination, Forwarder};
+use splash::learn;
 use splash::listen::{self, Received};
+use splash::manual::{self, ManOption};
 use splash::merge::{self, Log};
-use splash::output::{ParsedLine, Token, TokenKind};
+use splash::output::{OutputMode, ParsedLine, Token, TokenKind, OUTPUT_NAMES};
 use splash::rate::RateLimit;
 use splash::registry;
-use splash::source::{self, Follower, LogFile};
+use splash::replay;
+use splash::source::{self, Encoding, Follower, LogFile};
 use splash::stats::{self, Stats, StatsOptions};
 use splash::syslog;
 use splash::tail::Tail;
@@ -32,7 +40,7 @@ use splash::{
 };
 use std::borrow::Cow;
 use std::fs;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -58,12 +66,31 @@ const RATE_LIMIT_NEEDS_STDOUT: &str = "--rate-limit cannot be combined with the 
 /// The limit on input lines per second, when --rate-limit is given
 static RATE_LIMIT: OnceLock<Mutex<RateLimit>> = OnceLock::new();
 
+/// Explains why the curses viewer cannot be combined with --correlate
+const CORRELATE_NEEDS_STDOUT: &str = "--correlate cannot be combined with the curses viewer";
+
+/// Explains why the curses viewer cannot be combined with --diff
+const DIFF_NEEDS_STDOUT: &str = "--diff cannot be combined with the curses viewer";
+
+/// Explains why the curses viewer cannot be combined with --replay
+const REPLAY_NEEDS_STDOUT: &str = "--replay cannot be combined with the curses viewer";
+
+/// Explains why --diff needs two files
+const DIFF_NEEDS_TWO_FILES: &str = "--diff compares two files; give --path two files";
+
 /// Explains why the curses viewer cannot be given several files
 const VIEWER_SHOWS_ONE_FILE: &str = "The curses viewer shows one file; give --path one file";
 
 /// Explains why the curses viewer cannot be combined with --forward
 const FORWARD_NEEDS_STDOUT: &str =
     "--forward sends the output splash writes, and the curses viewer writes none";
+
+/// Explains why the curses viewer cannot be combined with --alert
+const ALERT_NEEDS_STDOUT: &str = "--alert cannot be combined with the curses viewer";
+
+/// The patterns that raise an alert and the thread sending alerts, when
+/// --alert is given
+static ALERTS: OnceLock<(Patterns, Notifier)> = OnceLock::new();
 
 /// The destination output is also sent to, when --forward is given
 static FORWARDER: OnceLock<Forwarder> = OnceLock::new();
@@ -88,214 +115,436 @@ enum Input<'a> {
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+#[command(
+    after_help = "--help lists every option.",
+    after_long_help = "--man writes the manual page."
+)]
 #[command(group(ArgGroup::new("followed").args(["path", "cloudwatch"]).multiple(true)))]
+#[command(group(ArgGroup::new("alert_targets").args(["alert_webhook", "alert_desktop"]).multiple(true)))]
 struct Args {
     /// Log Parsing Mode (apache-error, apm, auth, caddy, ci, clf, cloud-init, cron, distcc, dmesg,
     /// docker, dovecot, elasticsearch, exim, fetchmail, ftpstats, git, haproxy, httpd, icecast,
     /// journalctl (or systemd), kubernetes (or k8s), mongodb, mysql, nginx-error, oops, php,
     /// postfix, postgresql, procmail, proftpd, pure-ftpd, redis, squid, ssh, sudo, sulog, super,
     /// syslog, systemd-resolved, terraform, ulogd, varnish, vsftpd, xferlog, ad-hoc, auto)
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Input")]
     mode: Option<String>,
 
     /// Detect the log format from the first lines of the input
-    #[arg(long, conflicts_with = "mode")]
+    #[arg(long, conflicts_with = "mode", help_heading = "Input")]
     auto: bool,
 
     /// Paths to the log files, or - to read stdin. A file name may hold * and ?
-    #[arg(short, long, num_args = 1..)]
+    #[arg(short, long, num_args = 1.., help_heading = "Input")]
     path: Vec<String>,
 
     /// Keep reading the --path files or the --cloudwatch log group as they grow, as tail -f does
-    #[arg(short, long, requires = "followed")]
+    #[arg(short, long, requires = "followed", help_heading = "Input")]
     follow: bool,
 
     /// Interleave the lines of several --path files in time order, labeled with their file
-    #[arg(long, requires = "path")]
+    #[arg(
+        long,
+        requires = "path",
+        help_heading = "Input",
+        hide_short_help = true
+    )]
     merge: bool,
 
     /// Start each line with where it came from: its file, the address that sent it, or its log stream
-    #[arg(long)]
+    #[arg(long, help_heading = "Input", hide_short_help = true)]
     label: bool,
 
     /// Read the files in the subdirectories of a --path directory too
-    #[arg(short, long, requires = "path")]
+    #[arg(
+        short,
+        long,
+        requires = "path",
+        help_heading = "Input",
+        hide_short_help = true
+    )]
     recursive: bool,
 
     /// Receive log lines over TCP or HTTP on this address, such as :8080 or 127.0.0.1:8080
-    #[arg(long, value_name = "ADDRESS", conflicts_with = "path")]
+    #[arg(
+        long,
+        value_name = "ADDRESS",
+        conflicts_with = "path",
+        help_heading = "Input",
+        hide_short_help = true
+    )]
     listen: Option<String>,
 
     /// Receive syslog messages over UDP and TCP on this address (default :514)
     #[arg(long, value_name = "ADDRESS", num_args = 0..=1,
-          default_missing_value = listen::SYSLOG_ADDRESS, conflicts_with_all = ["path", "listen"])]
+          default_missing_value = listen::SYSLOG_ADDRESS, conflicts_with_all = ["path", "listen"], help_heading = "Input", hide_short_help = true)]
     syslog: Option<String>,
 
     /// Read the events of this CloudWatch Logs log group, with the AWS CLI's region and credentials
-    #[arg(long, value_name = "GROUP", conflicts_with_all = ["path", "listen", "syslog"])]
+    #[arg(long, value_name = "GROUP", conflicts_with_all = ["path", "listen", "syslog"], help_heading = "Input", hide_short_help = true)]
     cloudwatch: Option<String>,
 
-    /// Also send each line of output to WebSocket clients on this address, such as :8081
-    #[arg(long, value_name = "ADDRESS")]
-    websocket: Option<String>,
-
-    /// Also send each line of output to tcp://HOST:PORT, udp://HOST:PORT, or http://HOST:PORT/PATH
-    #[arg(long, value_name = "URL")]
-    forward: Option<String>,
-
     /// Keep at most this many input lines each second, dropping the rest
-    #[arg(long, value_name = "LINES", value_parser = clap::value_parser!(u64).range(1..))]
+    #[arg(long, value_name = "LINES", value_parser = clap::value_parser!(u64).range(1..), help_heading = "Input", hide_short_help = true)]
     rate_limit: Option<u64>,
 
-    /// Output format (ansi, csv, curses, html, json, jsonl, plain)
-    #[arg(short, long)]
-    output: Option<String>,
-
-    /// A style sheet to add to HTML output after the theme's rules
-    #[arg(long, value_name = "FILE")]
-    css: Option<String>,
-
-    /// Start each line of HTML output with its line number in the input
-    #[arg(long)]
-    line_numbers: bool,
-
-    /// Fields csv and jsonl output write, as FIELD,FIELD (repeatable)
-    #[arg(long, value_name = "FIELDS")]
-    fields: Vec<String>,
-
-    /// Worker threads used to render a file (default: one per core)
-    #[arg(short, long)]
-    jobs: Option<usize>,
-
-    /// Config file to read instead of ~/.splash/config.toml or ~/.splashrc
-    #[arg(long)]
-    config: Option<String>,
-
-    /// Color theme (dark, light, solarized, dracula)
-    #[arg(long)]
-    theme: Option<String>,
-
-    /// Override one token color, as KEY=COLOR (repeatable)
-    #[arg(long, value_name = "KEY=COLOR")]
-    color: Vec<String>,
-
-    /// Load a saved color profile
-    #[arg(long)]
-    profile: Option<String>,
-
-    /// Save the resolved colors as a profile and exit
-    #[arg(long, value_name = "NAME")]
-    save_profile: Option<String>,
-
-    /// List saved color profiles
-    #[arg(long)]
-    list_profiles: bool,
-
-    /// List available color themes
-    #[arg(long)]
-    list_themes: bool,
-
-    /// List all available plugins
-    #[arg(long)]
-    list_plugins: bool,
-
-    /// Also load plugin files from this directory (repeatable)
-    #[arg(long, value_name = "DIR")]
-    plugin_dir: Vec<String>,
-
-    /// Load plugin files again whenever one changes
-    #[arg(long)]
-    reload_plugins: bool,
-
-    /// Report which of a plugin file's patterns read each input line, and exit
-    #[arg(long, value_name = "FILE")]
-    test_regex: Option<String>,
-
-    /// Read the input with this plugin, as --mode does
-    #[arg(long, value_name = "NAME", conflicts_with = "mode")]
-    plugin: Option<String>,
-
-    /// Leave a plugin out of auto detection and refuse its mode (repeatable)
-    #[arg(long, value_name = "NAME")]
-    disable_plugin: Vec<String>,
+    /// Read the input, and write ansi and plain output, in this encoding, utf-8 or latin1 (default: the locale's)
+    #[arg(
+        long,
+        value_name = "ENCODING",
+        help_heading = "Input",
+        hide_short_help = true
+    )]
+    encoding: Option<String>,
 
     /// Keep only lines at these levels, as LEVEL,LEVEL, or drop a level written !LEVEL (repeatable)
-    #[arg(long, value_name = "LEVELS")]
+    #[arg(long, value_name = "LEVELS", help_heading = "Filters")]
     level: Vec<String>,
 
     /// Keep only lines written at or after this time, such as 2h ago or 2024-01-01
-    #[arg(long, value_name = "TIME")]
+    #[arg(long, value_name = "TIME", help_heading = "Filters")]
     since: Option<String>,
 
     /// Keep only lines written at or before this time
-    #[arg(long, value_name = "TIME")]
+    #[arg(long, value_name = "TIME", help_heading = "Filters")]
     until: Option<String>,
 
     /// Keep only lines matching this pattern, and highlight the match (repeatable)
-    #[arg(long, value_name = "PATTERN")]
+    #[arg(long, value_name = "PATTERN", help_heading = "Filters")]
     grep: Vec<String>,
 
     /// Drop lines matching this pattern (repeatable)
-    #[arg(long, value_name = "PATTERN")]
+    #[arg(long, value_name = "PATTERN", help_heading = "Filters")]
     exclude: Vec<String>,
 
     /// Keep only lines holding a field with this value, as KEY=VALUE, or not, as KEY!=VALUE (repeatable)
-    #[arg(long, value_name = "KEY=VALUE")]
+    #[arg(
+        long,
+        value_name = "KEY=VALUE",
+        help_heading = "Filters",
+        hide_short_help = true
+    )]
     filter: Vec<String>,
 
     /// Mask IP addresses, email addresses, and user names
-    #[arg(long)]
+    #[arg(long, help_heading = "Filters", hide_short_help = true)]
     anonymize: bool,
 
-    /// Rewrite timestamps written as seconds since the epoch as dates
-    #[arg(long)]
-    convert_date: bool,
+    /// Also send each line of output to WebSocket clients on this address, such as :8081
+    #[arg(
+        long,
+        value_name = "ADDRESS",
+        help_heading = "Output",
+        hide_short_help = true
+    )]
+    websocket: Option<String>,
 
-    /// Rewrite every timestamp as RFC 3339
-    #[arg(long)]
-    normalize_dates: bool,
+    /// Also send each line of output to tcp://HOST:PORT, udp://HOST:PORT, or http://HOST:PORT/PATH
+    #[arg(
+        long,
+        value_name = "URL",
+        help_heading = "Output",
+        hide_short_help = true
+    )]
+    forward: Option<String>,
 
-    /// Rewrite every timestamp in this zone, such as UTC or America/New_York
-    #[arg(long, value_name = "ZONE")]
-    tz: Option<String>,
+    /// Output format (ansi, csv, curses, html, json, jsonl, plain)
+    #[arg(short, long, help_heading = "Output")]
+    output: Option<String>,
 
-    /// Rewrite every timestamp as its distance from now, such as 2 hours ago
-    #[arg(long)]
-    relative: bool,
+    /// A style sheet to add to HTML output after the theme's rules
+    #[arg(
+        long,
+        value_name = "FILE",
+        help_heading = "Output",
+        hide_short_help = true
+    )]
+    css: Option<String>,
+
+    /// Start each line of HTML output with its line number in the input
+    #[arg(long, help_heading = "Output", hide_short_help = true)]
+    line_numbers: bool,
+
+    /// Fields csv and jsonl output write, as FIELD,FIELD (repeatable)
+    #[arg(
+        long,
+        value_name = "FIELDS",
+        help_heading = "Output",
+        hide_short_help = true
+    )]
+    fields: Vec<String>,
+
+    /// Worker threads used to render a file (default: one per core)
+    #[arg(short, long, help_heading = "Output", hide_short_help = true)]
+    jobs: Option<usize>,
+
+    /// Color theme (dark, light, solarized, dracula, colorblind, high-contrast)
+    #[arg(long, help_heading = "Colors")]
+    theme: Option<String>,
+
+    /// Override one token color, as KEY=COLOR (repeatable)
+    #[arg(
+        long,
+        value_name = "KEY=COLOR",
+        help_heading = "Colors",
+        hide_short_help = true
+    )]
+    color: Vec<String>,
+
+    /// Load a saved color profile
+    #[arg(long, help_heading = "Colors", hide_short_help = true)]
+    profile: Option<String>,
+
+    /// Save the resolved colors as a profile and exit
+    #[arg(
+        long,
+        value_name = "NAME",
+        help_heading = "Colors",
+        hide_short_help = true
+    )]
+    save_profile: Option<String>,
+
+    /// List saved color profiles
+    #[arg(long, help_heading = "Colors", hide_short_help = true)]
+    list_profiles: bool,
+
+    /// List available color themes
+    #[arg(long, help_heading = "Colors", hide_short_help = true)]
+    list_themes: bool,
 
     /// Leave keywords such as ERROR, TCP, and SELECT in the style around them
-    #[arg(long)]
+    #[arg(long, help_heading = "Colors", hide_short_help = true)]
     no_wordcolor: bool,
 
     /// Mark unknown users, and follow ports and addresses with their services, hosts, and locations
-    #[arg(long, conflicts_with = "no_lookups")]
+    #[arg(
+        long,
+        conflicts_with = "no_lookups",
+        help_heading = "Colors",
+        hide_short_help = true
+    )]
     lookups: bool,
 
     /// Turn lookups off, even when the config file turns them on
-    #[arg(long)]
+    #[arg(long, help_heading = "Colors", hide_short_help = true)]
     no_lookups: bool,
 
+    /// Rewrite timestamps written as seconds since the epoch as dates
+    #[arg(long, help_heading = "Timestamps", hide_short_help = true)]
+    convert_date: bool,
+
+    /// Rewrite every timestamp as RFC 3339
+    #[arg(long, help_heading = "Timestamps", hide_short_help = true)]
+    normalize_dates: bool,
+
+    /// Rewrite every timestamp in this zone, such as UTC or America/New_York
+    #[arg(
+        long,
+        value_name = "ZONE",
+        help_heading = "Timestamps",
+        hide_short_help = true
+    )]
+    tz: Option<String>,
+
+    /// Rewrite every timestamp as its distance from now, such as 2 hours ago
+    #[arg(long, help_heading = "Timestamps", hide_short_help = true)]
+    relative: bool,
+
     /// Write statistics on the kept lines in place of the lines
-    #[arg(long, conflicts_with = "histogram")]
+    #[arg(
+        long,
+        conflicts_with = "histogram",
+        help_heading = "Reports",
+        hide_short_help = true
+    )]
     stats: bool,
 
     /// Write the line count, error count, and time range after the lines
-    #[arg(long)]
+    #[arg(long, help_heading = "Reports", hide_short_help = true)]
     summary: bool,
 
     /// Write the number of lines in each period, such as 5m or 1h, in place of the lines
-    #[arg(long, value_name = "PERIOD", num_args = 0..=1, default_missing_value = stats::DEFAULT_BUCKET)]
+    #[arg(long, value_name = "PERIOD", num_args = 0..=1, default_missing_value = stats::DEFAULT_BUCKET, help_heading = "Reports", hide_short_help = true)]
     histogram: Option<String>,
 
-    /// Format of --stats, --summary, and --histogram (text, json, csv)
-    #[arg(long, value_name = "FORMAT")]
+    /// Write sparklines of the lines and errors in each period, such as 5m or 1h, in place of the lines
+    #[arg(long, value_name = "PERIOD", num_args = 0..=1, default_missing_value = stats::DEFAULT_BUCKET,
+          conflicts_with_all = ["stats", "histogram"], help_heading = "Reports", hide_short_help = true)]
+    graph: Option<String>,
+
+    /// Also draw the average of this field's numbers in each --graph period, such as duration
+    #[arg(
+        long,
+        value_name = "FIELD",
+        requires = "graph",
+        help_heading = "Reports",
+        hide_short_help = true
+    )]
+    graph_field: Option<String>,
+
+    /// Format of --stats, --summary, --histogram, and --graph (text, json, csv)
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        help_heading = "Reports",
+        hide_short_help = true
+    )]
     stats_format: Option<String>,
+
+    /// Write the lines that share a request, trace, or correlation ID together, under the ID
+    #[arg(long, conflicts_with_all = ["follow", "listen", "syslog", "cloudwatch"], help_heading = "Analysis", hide_short_help = true)]
+    correlate: bool,
+
+    /// Compare two --path files line by line, as diff -u does, leaving timestamps and IDs out
+    #[arg(long, requires = "path", conflicts_with_all = ["follow", "merge", "correlate"], help_heading = "Analysis", hide_short_help = true)]
+    diff: bool,
+
+    /// Write the lines at the pace their timestamps give, SPEED times as fast (default 1)
+    #[arg(long, value_name = "SPEED", num_args = 0..=1, default_missing_value = "1",
+          value_parser = replay::parse_speed,
+          conflicts_with_all = ["follow", "correlate", "diff", "listen", "syslog", "cloudwatch"], help_heading = "Analysis", hide_short_help = true)]
+    replay: Option<f64>,
+
+    /// Send an alert for each input line matching this pattern (repeatable)
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        requires = "alert_targets",
+        help_heading = "Analysis",
+        hide_short_help = true
+    )]
+    alert: Vec<String>,
+
+    /// Post each alert as JSON to this http://HOST:PORT/PATH URL
+    #[arg(
+        long,
+        value_name = "URL",
+        requires = "alert",
+        help_heading = "Analysis",
+        hide_short_help = true
+    )]
+    alert_webhook: Option<String>,
+
+    /// Show each alert as a desktop notification
+    #[arg(
+        long,
+        requires = "alert",
+        help_heading = "Analysis",
+        hide_short_help = true
+    )]
+    alert_desktop: bool,
+
+    /// List all available plugins
+    #[arg(long, help_heading = "Plugins")]
+    list_plugins: bool,
+
+    /// Also load plugin files from this directory (repeatable)
+    #[arg(
+        long,
+        value_name = "DIR",
+        help_heading = "Plugins",
+        hide_short_help = true
+    )]
+    plugin_dir: Vec<String>,
+
+    /// Load plugin files again whenever one changes
+    #[arg(long, help_heading = "Plugins", hide_short_help = true)]
+    reload_plugins: bool,
+
+    /// Report which of a plugin file's patterns read each input line, and exit
+    #[arg(
+        long,
+        value_name = "FILE",
+        help_heading = "Plugins",
+        hide_short_help = true
+    )]
+    test_regex: Option<String>,
+
+    /// Write a plugin file named NAME whose patterns read the input lines, and exit
+    #[arg(
+        long,
+        value_name = "NAME",
+        help_heading = "Plugins",
+        hide_short_help = true
+    )]
+    learn: Option<String>,
+
+    /// Read the input with this plugin, as --mode does
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "mode",
+        help_heading = "Plugins",
+        hide_short_help = true
+    )]
+    plugin: Option<String>,
+
+    /// Leave a plugin out of auto detection and refuse its mode (repeatable)
+    #[arg(
+        long,
+        value_name = "NAME",
+        help_heading = "Plugins",
+        hide_short_help = true
+    )]
+    disable_plugin: Vec<String>,
+
+    /// Config file to read instead of ~/.splash/config.toml or ~/.splashrc
+    #[arg(long, help_heading = "Setup", hide_short_help = true)]
+    config: Option<String>,
+
+    /// Write a completion script for this shell (bash, zsh, fish), and exit
+    #[arg(
+        long,
+        value_name = "SHELL",
+        help_heading = "Setup",
+        hide_short_help = true
+    )]
+    completions: Option<String>,
+
+    /// Write the manual page in roff, and exit
+    #[arg(long, help_heading = "Setup", hide_short_help = true)]
+    man: bool,
 }
 
 fn main() {
     stop_quietly_on_a_closed_pipe();
 
     let args = Args::parse();
+    let term = std::env::var("TERM").ok();
+    let variable = |name: &str| std::env::var(name).ok();
+
+    source::set_encoding(match args.encoding.as_deref() {
+        Some(name) => Encoding::parse(name).unwrap_or_else(|e| fail(&e.to_string())),
+        None => Encoding::from_locale(
+            variable("LC_ALL").as_deref(),
+            variable("LC_CTYPE").as_deref(),
+            variable("LANG").as_deref(),
+        ),
+    });
+
+    if args.man {
+        let today = time::format_rfc3339(time::now(), None, &Zone::Utc);
+
+        print!(
+            "{}",
+            manual::man_page(env!("CARGO_PKG_VERSION"), &today[..10], &man_options())
+        );
+        return;
+    }
+
+    if let Some(name) = args.completions.as_deref() {
+        let shell = Shell::parse(name).unwrap_or_else(|e| fail(&e.to_string()));
+
+        print!("{}", completions::script(shell, &completed_options()));
+        return;
+    }
+
+    if !color::terminal_shows_colors(
+        term.as_deref(),
+        std::env::var("CLICOLOR_FORCE").ok().as_deref(),
+    ) {
+        colored::control::set_override(false);
+    }
 
     let config = match load_config(args.config.as_deref()) {
         Ok(config) => config,
@@ -318,6 +567,21 @@ fn main() {
 
     if let Some(file) = args.test_regex.as_deref() {
         std::process::exit(test_regex(file, &args.path));
+    }
+
+    if let Some(name) = args.learn.as_deref() {
+        let text: String = input_texts(&args.path)
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        match learn::learn(name, &text) {
+            Ok(file) => print!("{}", file),
+            Err(e) => fail(&e.to_string()),
+        }
+
+        return;
     }
 
     let profiles = Profiles::default_profiles();
@@ -382,6 +646,8 @@ fn main() {
             stats: args.stats,
             summary: args.summary,
             histogram: args.histogram,
+            graph: args.graph,
+            graph_field: args.graph_field,
             format: args.stats_format,
         },
     };
@@ -390,6 +656,11 @@ fn main() {
         Ok(settings) => settings,
         Err(e) => fail(&e.to_string()),
     };
+
+    source::set_output_encoding(match settings.output_mode {
+        OutputMode::Ansi | OutputMode::Plain => source::encoding(),
+        _ => Encoding::Utf8,
+    });
 
     if let Some(name) = args.save_profile {
         match profiles.save(&name, &settings.theme) {
@@ -467,14 +738,66 @@ fn main() {
         }
     }
 
+    if !args.alert.is_empty() {
+        if settings.output_mode.is_interactive() {
+            fail(ALERT_NEEDS_STDOUT);
+        }
+
+        let patterns = Patterns::build(&args.alert).unwrap_or_else(|e| fail(&e.to_string()));
+        let targets = Targets::new(args.alert_webhook.as_deref(), args.alert_desktop)
+            .unwrap_or_else(|e| fail(&e.to_string()));
+        let notifier = Notifier::start(targets, |failure| eprintln!("{}", failure));
+
+        let _ = ALERTS.set((patterns, notifier));
+    }
+
     let _plugin_watcher = args
         .reload_plugins
         .then(|| watch_plugins(discovery, plugins));
 
-    run(&input, &settings, args.label);
+    if args.diff {
+        if settings.output_mode.is_interactive() {
+            fail(DIFF_NEEDS_STDOUT);
+        }
+
+        let files = match input {
+            Input::Files { ref sources, .. } => sources.files.as_slice(),
+            _ => &[],
+        };
+
+        if files.len() != 2 {
+            fail(DIFF_NEEDS_TWO_FILES);
+        }
+
+        if let Err(e) = render_diff(&files[0], &files[1], &settings) {
+            fail(&e.to_string());
+        }
+    } else if let Some(speed) = args.replay {
+        if settings.output_mode.is_interactive() {
+            fail(REPLAY_NEEDS_STDOUT);
+        }
+
+        if let Err(e) = render_replayed(files_of(&input), speed, &settings) {
+            fail(&e.to_string());
+        }
+    } else if args.correlate {
+        if settings.output_mode.is_interactive() {
+            fail(CORRELATE_NEEDS_STDOUT);
+        }
+
+        if let Err(e) = render_correlated(files_of(&input), &settings) {
+            fail(&e.to_string());
+        }
+    } else {
+        run(&input, &settings, args.label);
+    }
 
     if let Some(forwarder) = FORWARDER.get() {
         forwarder.finish();
+    }
+
+    if let Some((_, notifier)) = ALERTS.get() {
+        notifier.finish();
     }
 }
 
@@ -538,7 +861,7 @@ fn run(input: &Input, settings: &Settings, label: bool) {
                     .collect();
 
                 settings.mode = detect::resolve_mode(mode, &sample);
-                let kept = rate_limited(&sample);
+                let kept = admitted(&sample);
 
                 emit(&render_contents_counted(
                     &kept, &settings, &mut entry, &mut stats,
@@ -547,7 +870,7 @@ fn run(input: &Input, settings: &Settings, label: bool) {
 
             for line in lines {
                 let line = line + "\n";
-                let kept = rate_limited(&line);
+                let kept = admitted(&line);
 
                 emit(&render_contents_counted(
                     &kept, &settings, &mut entry, &mut stats,
@@ -558,6 +881,75 @@ fn run(input: &Input, settings: &Settings, label: bool) {
             emit_closing(&settings, &stats);
         }
     }
+}
+
+/// Each option with a long name, and what follows it on the command line
+fn completed_options() -> Vec<Completed> {
+    let mut command = Args::command();
+    command.build();
+
+    let words = |list: &[&str]| Values::Words(list.iter().map(|word| word.to_string()).collect());
+
+    command
+        .get_arguments()
+        .filter_map(|arg| {
+            let optional = arg
+                .get_num_args()
+                .is_some_and(|range| range.min_values() == 0);
+
+            let values = match arg.get_id().as_str() {
+                _ if !arg.get_action().takes_values() || optional => Values::Nothing,
+                "mode" | "plugin" | "disable_plugin" => Values::Words(registry::mode_names()),
+                "output" => words(&OUTPUT_NAMES),
+                "theme" => words(&splash::theme::PRESETS),
+                "encoding" => words(&["utf-8", "latin1"]),
+                "stats_format" => words(&["text", "json", "csv"]),
+                "completions" => words(&["bash", "zsh", "fish"]),
+                "path" | "config" | "css" | "test_regex" => Values::Files,
+                "plugin_dir" => Values::Directories,
+                _ => Values::Any,
+            };
+
+            Some(Completed {
+                long: arg.get_long()?.to_string(),
+                short: arg.get_short(),
+                help: arg.get_help().map(ToString::to_string).unwrap_or_default(),
+                values,
+            })
+        })
+        .collect()
+}
+
+/// Each option as the manual lists it
+fn man_options() -> Vec<ManOption> {
+    let mut command = Args::command();
+    command.build();
+
+    command
+        .get_arguments()
+        .filter_map(|arg| {
+            let long = arg.get_long()?;
+            let names = match arg.get_short() {
+                Some(short) => format!("-{}, --{}", short, long),
+                None => format!("--{}", long),
+            };
+            let range = arg.get_num_args();
+            let value = arg
+                .get_value_names()
+                .filter(|_| arg.get_action().takes_values())
+                .map(|names| match range {
+                    Some(range) if range.min_values() == 0 => format!("[{}]", names[0]),
+                    Some(range) if range.max_values() > 1 => format!("{}...", names[0]),
+                    _ => names[0].to_string(),
+                });
+
+            Some(ManOption {
+                names,
+                value,
+                help: arg.get_help().map(ToString::to_string).unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 fn load_config(path: Option<&str>) -> Result<Config, splash::config::ConfigError> {
@@ -617,21 +1009,7 @@ fn test_regex(file: &str, values: &[String]) -> i32 {
         .and_then(|plugin| plugin.resolve(registry::builtins()))
         .unwrap_or_else(|e| fail(&format!("Cannot load plugin {}: {}", file, e)));
 
-    let mut texts = Vec::new();
-
-    if values.is_empty() || values == [STDIN_PATH] {
-        let mut bytes = Vec::new();
-        let _ = io::stdin().read_to_end(&mut bytes);
-        texts.push((None, String::from_utf8_lossy(&bytes).into_owned()));
-    } else {
-        let sources = expand_paths(values, false).unwrap_or_else(|e| fail(&e.to_string()));
-
-        for path in sources.files {
-            let log = LogFile::open(&path).unwrap_or_else(|e| fail(&e.to_string()));
-            texts.push((Some(path), log.text().to_string()));
-        }
-    }
-
+    let texts = input_texts(values);
     let several = texts.len() > 1;
     let mut status = 0;
 
@@ -649,6 +1027,26 @@ fn test_regex(file: &str, values: &[String]) -> i32 {
     }
 
     status
+}
+
+/// The text of stdin, or of each file the `--path` values name, with its path
+fn input_texts(values: &[String]) -> Vec<(Option<PathBuf>, String)> {
+    let mut texts = Vec::new();
+
+    if values.is_empty() || values == [STDIN_PATH] {
+        let mut bytes = Vec::new();
+        let _ = io::stdin().read_to_end(&mut bytes);
+        texts.push((None, source::decode(&bytes).into_owned()));
+    } else {
+        let sources = expand_paths(values, false).unwrap_or_else(|e| fail(&e.to_string()));
+
+        for path in sources.files {
+            let log = LogFile::open(&path).unwrap_or_else(|e| fail(&e.to_string()));
+            texts.push((Some(path), log.text().to_string()));
+        }
+    }
+
+    texts
 }
 
 /// The files and directories the `--path` values name, with their patterns
@@ -721,14 +1119,19 @@ impl Headers {
 
         self.last_shown = Some(index);
 
-        let header = Token::owned(format!("==> {} <==", path.display()), TokenKind::Header);
-        let line = ParsedLine::new(vec![header]);
-
-        emit(&format!(
-            "{}\n",
-            settings.output_mode.render(&line, &settings.theme)
-        ));
+        emit_header(&format!("==> {} <==", path.display()), settings);
     }
+}
+
+/// Writes a line of text styled as a header
+fn emit_header(text: &str, settings: &Settings) {
+    let header = Token::owned(text.to_string(), TokenKind::Header);
+    let line = ParsedLine::new(vec![header]);
+
+    emit(&format!(
+        "{}\n",
+        settings.output_mode.render(&line, &settings.theme)
+    ));
 }
 
 /// Renders log files one after another, or merged in time order, then,
@@ -797,21 +1200,20 @@ fn render_paths(
 
     emit(&opening(settings));
 
-    let mut logs = Vec::new();
-
-    for file in &files {
-        logs.push(LogFile::open(&file.path)?);
-    }
-
-    let complete: Vec<&str> = logs
-        .iter()
-        .map(|log| match follow {
-            true => &log.text()[..log.text().rfind('\n').map_or(0, |end| end + 1)],
-            false => log.text(),
-        })
-        .collect();
-
     if merge {
+        let mut logs = Vec::new();
+
+        for file in &files {
+            logs.push(LogFile::open(&file.path)?);
+        }
+
+        let complete: Vec<&str> = logs
+            .iter()
+            .map(|log| match follow {
+                true => &log.text()[..log.text().rfind('\n').map_or(0, |end| end + 1)],
+                false => log.text(),
+            })
+            .collect();
         let modes: Vec<String> = files
             .iter()
             .map(|file| file.settings.mode.clone())
@@ -829,21 +1231,41 @@ fn render_paths(
         }
 
         emit(&progress(settings, &stats));
+
+        for (index, file) in files.iter_mut().enumerate() {
+            file.follower = Follower::new(file.path.clone(), fs::metadata(&file.path)?.len());
+            file.pending = logs[index].text().as_bytes()[complete[index].len()..].to_vec();
+        }
     } else {
         for (index, file) in files.iter_mut().enumerate() {
             headers.show(index, &file.path, settings);
 
-            for chunk in source::line_chunks(complete[index], source::CHUNK_BYTES) {
-                write_lines(chunk, &file.settings, &mut file.entry, &mut stats);
+            let (mut rest, read) = source::read_chunks(
+                &file.path,
+                source::CHUNK_BYTES,
+                source::encoding(),
+                |chunk| write_lines(chunk, &file.settings, &mut file.entry, &mut stats),
+            )?;
+
+            if let Some(lines) = source::take_complete_lines(&mut rest) {
+                write_lines(&lines, &file.settings, &mut file.entry, &mut stats);
+            }
+
+            match follow {
+                true => {
+                    file.follower = Follower::new(file.path.clone(), read);
+                    file.pending = rest;
+                }
+                false => write_lines(
+                    &source::decode(&rest),
+                    &file.settings,
+                    &mut file.entry,
+                    &mut stats,
+                ),
             }
 
             emit(&progress(settings, &stats));
         }
-    }
-
-    for (index, file) in files.iter_mut().enumerate() {
-        file.follower = Follower::new(file.path.clone(), fs::metadata(&file.path)?.len());
-        file.pending = logs[index].text().as_bytes()[complete[index].len()..].to_vec();
     }
 
     while follow && !INTERRUPTED.load(Ordering::SeqCst) {
@@ -877,7 +1299,7 @@ fn render_paths(
 
     for (index, file) in files.iter_mut().enumerate() {
         if !file.pending.is_empty() {
-            let rest = String::from_utf8_lossy(&file.pending).into_owned();
+            let rest = source::decode(&file.pending).into_owned();
 
             headers.show(index, &file.path, settings);
             write_rendered(&rest, &file.settings, &mut file.entry, &mut stats);
@@ -933,6 +1355,198 @@ fn render_received(lines: mpsc::Receiver<Received>, label: bool, settings: &Sett
     emit_closing(&settings, &stats);
 }
 
+/// The `--path` files, or none when splash reads stdin
+fn files_of<'a>(input: &'a Input) -> Option<&'a Sources> {
+    match input {
+        Input::Files { sources, .. } => Some(sources),
+        _ => None,
+    }
+}
+
+/// The text of stdin, or of each `--path` file, with the settings it is
+/// rendered with. The lines of several files are labeled with their file.
+fn read_logs(
+    sources: Option<&Sources>,
+    settings: &Settings,
+) -> io::Result<Vec<(Settings, String)>> {
+    let mut logs: Vec<(Settings, String)> = Vec::new();
+
+    match sources {
+        Some(sources) => {
+            for path in &sources.files {
+                let settings = Settings {
+                    source: (sources.files.len() > 1).then(|| source_label(path)),
+                    ..resolve_file_settings(path, settings)?
+                };
+
+                logs.push((settings, LogFile::open(path)?.text().to_string()));
+            }
+        }
+        None => {
+            let mut bytes = Vec::new();
+            io::stdin().read_to_end(&mut bytes)?;
+
+            let text = source::decode(&bytes).into_owned();
+            let settings = Settings {
+                mode: detect::resolve_mode(&settings.mode, &text),
+                ..settings.clone()
+            };
+
+            logs.push((settings, text));
+        }
+    }
+
+    Ok(logs)
+}
+
+/// Renders the entries of stdin, or of the `--path` files merged in time
+/// order, that share an identifier, each group under a header naming it
+fn render_correlated(sources: Option<&Sources>, settings: &Settings) -> io::Result<()> {
+    let logs = read_logs(sources, settings)?;
+    let merging: Vec<Log> = logs
+        .iter()
+        .map(|(settings, text)| Log {
+            text,
+            mode: &settings.mode,
+        })
+        .collect();
+    let entries = merge::merge(&merging, &Zone::local(), time::now());
+    let texts: Vec<&str> = entries.iter().map(|entry| entry.text).collect();
+
+    let mut filters: Vec<Entry> = logs.iter().map(|_| Entry::default()).collect();
+    let mut stats = Stats::default();
+
+    emit(&opening(settings));
+
+    for group in correlate::groups(&texts) {
+        emit_header(&format!("==> {} <==", group.id), settings);
+
+        for member in group.members {
+            let entry = &entries[member];
+
+            write_lines(
+                entry.text,
+                &logs[entry.log].0,
+                &mut filters[entry.log],
+                &mut stats,
+            );
+        }
+    }
+
+    emit(&progress(settings, &stats));
+    emit_closing(settings, &stats);
+
+    Ok(())
+}
+
+/// Renders the entries of stdin, or of the `--path` files merged in time
+/// order, each after waiting for the time between its timestamp and the
+/// last one, divided by `speed`, until splash is interrupted
+fn render_replayed(sources: Option<&Sources>, speed: f64, settings: &Settings) -> io::Result<()> {
+    let logs = read_logs(sources, settings)?;
+    let merging: Vec<Log> = logs
+        .iter()
+        .map(|(settings, text)| Log {
+            text,
+            mode: &settings.mode,
+        })
+        .collect();
+    let timed = merge::merge_timed(&merging, &Zone::local(), time::now());
+    let moments: Vec<Option<merge::Moment>> = timed.iter().map(|(moment, _)| *moment).collect();
+
+    let mut filters: Vec<Entry> = logs.iter().map(|_| Entry::default()).collect();
+    let mut stats = Stats::default();
+
+    catch_interrupts();
+
+    emit(&opening(settings));
+
+    for ((_, entry), delay) in timed.iter().zip(replay::delays(&moments, speed)) {
+        if !wait(delay) {
+            break;
+        }
+
+        write_lines(
+            entry.text,
+            &logs[entry.log].0,
+            &mut filters[entry.log],
+            &mut stats,
+        );
+    }
+
+    emit(&progress(settings, &stats));
+    emit_closing(settings, &stats);
+
+    Ok(())
+}
+
+/// Waits for `delay`, returning false when splash is interrupted first
+fn wait(delay: Duration) -> bool {
+    let deadline = Instant::now() + delay;
+
+    while !INTERRUPTED.load(Ordering::SeqCst) {
+        let left = deadline.saturating_duration_since(Instant::now());
+
+        if left.is_zero() {
+            return true;
+        }
+
+        std::thread::sleep(left.min(INTERRUPT_POLL));
+    }
+
+    false
+}
+
+/// Renders the hunks of lines that differ between two files, each line
+/// marked `-` when only the old file holds it, `+` when only the new file
+/// does, and with a space when both do
+fn render_diff(old_path: &Path, new_path: &Path, settings: &Settings) -> io::Result<()> {
+    let marked = |path: &Path, marker: &str, kind: TokenKind| -> io::Result<Settings> {
+        Ok(Settings {
+            marker: Some((marker.to_string(), kind)),
+            ..resolve_file_settings(path, settings)?
+        })
+    };
+    let kept = marked(old_path, " ", TokenKind::Plain)?;
+    let removed = marked(old_path, "-", TokenKind::Failure)?;
+    let added = marked(new_path, "+", TokenKind::Success)?;
+
+    let old_log = LogFile::open(old_path)?;
+    let new_log = LogFile::open(new_path)?;
+    let old: Vec<&str> = old_log.text().lines().collect();
+    let new: Vec<&str> = new_log.text().lines().collect();
+    let hunks = diff::hunks(&diff::changes(&old, &new), diff::CONTEXT);
+
+    let mut entry = Entry::default();
+    let mut stats = Stats::default();
+
+    emit(&opening(settings));
+
+    if !hunks.is_empty() {
+        emit_header(&format!("--- {}", old_path.display()), settings);
+        emit_header(&format!("+++ {}", new_path.display()), settings);
+    }
+
+    for hunk in hunks {
+        emit_header(&hunk.header(), settings);
+
+        for change in hunk.changes {
+            let (line, marked) = match change {
+                diff::Change::Same { old: index, .. } => (old[index], &kept),
+                diff::Change::Removed { old: index } => (old[index], &removed),
+                diff::Change::Added { new: index } => (new[index], &added),
+            };
+
+            write_lines(&format!("{}\n", line), marked, &mut entry, &mut stats);
+        }
+    }
+
+    emit(&progress(settings, &stats));
+    emit_closing(settings, &stats);
+
+    Ok(())
+}
+
 /// Starts listening on `address`, and names the address bound on stderr,
 /// which gives the port chosen for port 0
 fn listen_on(address: &str) -> io::Result<mpsc::Receiver<Received>> {
@@ -964,7 +1578,7 @@ fn write_rendered(text: &str, settings: &Settings, entry: &mut Entry, stats: &mu
 
 /// Writes the rendered text alone
 fn write_lines(text: &str, settings: &Settings, entry: &mut Entry, stats: &mut Stats) {
-    let kept = rate_limited(text);
+    let kept = admitted(text);
 
     emit(&render_contents_counted(&kept, settings, entry, stats));
 }
@@ -1023,6 +1637,20 @@ fn rate_limited(text: &str) -> Cow<'_, str> {
     Cow::Owned(admitted.text)
 }
 
+/// The lines of `text` the rate limit keeps, after queuing an alert for each
+/// one that matches an alert pattern
+fn admitted(text: &str) -> Cow<'_, str> {
+    let kept = rate_limited(text);
+
+    if let Some((patterns, notifier)) = ALERTS.get() {
+        for alert in patterns.alerts(&kept) {
+            notifier.send(alert);
+        }
+    }
+
+    kept
+}
+
 /// Writes what splash writes when its input ends, after reporting the lines
 /// the last window of the rate limit dropped
 fn emit_closing(settings: &Settings, stats: &Stats) {
@@ -1040,7 +1668,9 @@ fn emit_closing(settings: &Settings, stats: &Stats) {
 /// Writes output to stdout, to any WebSocket clients, and to the forwarding
 /// destination
 fn emit(text: &str) {
-    print!("{}", text);
+    if let Err(e) = io::stdout().write_all(&source::output_encoding().encode(text)) {
+        fail(&e.to_string());
+    }
 
     if let Some(broadcaster) = BROADCASTER.get() {
         broadcaster.send(text);
@@ -1068,6 +1698,10 @@ fn stop_quietly_on_a_closed_pipe() {}
 fn view(input: &Input, settings: &Settings) -> io::Result<()> {
     if !io::stdout().is_terminal() {
         return Err(io::Error::other(tui::NEEDS_TERMINAL));
+    }
+
+    if std::env::var("TERM").is_ok_and(|term| term == color::DUMB_TERMINAL) {
+        return Err(io::Error::other(tui::NEEDS_CURSOR));
     }
 
     let mut tail = match *input {

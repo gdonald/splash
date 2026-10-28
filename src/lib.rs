@@ -1,3 +1,4 @@
+pub mod alert;
 pub mod anonymize;
 pub mod apache_error;
 pub mod apm;
@@ -8,11 +9,14 @@ pub mod ci;
 pub mod cloud_init;
 pub mod cloudwatch;
 pub mod color;
+pub mod completions;
 pub mod config;
 pub mod container;
+pub mod correlate;
 pub mod cron;
 pub mod dates;
 pub mod detect;
+pub mod diff;
 pub mod discovery;
 pub mod distcc;
 pub mod dmesg;
@@ -34,10 +38,12 @@ pub mod journalctl;
 pub mod json;
 pub mod keywords;
 pub mod kubernetes;
+pub mod learn;
 pub mod listen;
 pub mod logfmt;
 pub mod lookups;
 pub mod mail;
+pub mod manual;
 pub mod merge;
 pub mod mongodb;
 pub mod mysql;
@@ -55,12 +61,14 @@ pub mod pureftpd;
 pub mod rate;
 pub mod redis;
 pub mod registry;
+pub mod replay;
 pub mod resolved;
 pub mod source;
 pub mod squid;
 pub mod ssh;
 pub mod stats;
 pub mod sudo;
+pub mod suggest;
 pub mod sulog;
 pub mod super_log;
 pub mod syslog;
@@ -152,6 +160,7 @@ pub fn render_lines_with_jobs(
         fields: &[],
         anonymizer: None,
         source: None,
+        marker: None,
         plugin_themes: &BTreeMap::new(),
         line_numbers: false,
     };
@@ -282,12 +291,17 @@ pub fn render_file(path: &Path, settings: &Settings) -> io::Result<String> {
 }
 
 /// The settings to render a log file with, with `auto` mode resolved to the
-/// mode the start of the file is written in
+/// mode the start of the file is written in, reading only the lines
+/// detection samples
 pub fn resolve_file_settings(path: &Path, settings: &Settings) -> io::Result<Settings> {
-    let log = LogFile::open(path)?;
+    let file = io::BufReader::new(std::fs::File::open(path)?);
+    let sample: String = source::lines(file)
+        .take(detect::SAMPLE_SIZE)
+        .map(|line| line + "\n")
+        .collect();
 
     Ok(Settings {
-        mode: detect::resolve_mode(&settings.mode, log.text()),
+        mode: detect::resolve_mode(&settings.mode, &sample),
         ..settings.clone()
     })
 }
@@ -330,6 +344,7 @@ struct Renderer<'a> {
     fields: &'a [String],
     anonymizer: Option<&'a Anonymizer>,
     source: Option<&'a str>,
+    marker: Option<&'a (String, TokenKind)>,
     plugin_themes: &'a BTreeMap<String, Theme>,
     line_numbers: bool,
 }
@@ -348,6 +363,7 @@ impl<'a> Renderer<'a> {
             fields: &settings.fields,
             anonymizer: settings.anonymizer.as_ref(),
             source: settings.source.as_deref(),
+            marker: settings.marker.as_ref(),
             plugin_themes: &settings.plugin_themes,
             line_numbers: settings.line_numbers,
         }
@@ -397,14 +413,24 @@ impl<'a> Renderer<'a> {
         rendered
     }
 
-    /// The line after the name of the file it came from, when lines of
-    /// several files are merged
+    /// The line after its marker and the name of the file it came from,
+    /// when lines of several files are merged
     fn label<'c>(&self, mut parsed: ParsedLine<'c>) -> ParsedLine<'c> {
         if let Some(source) = self.source {
             parsed.tokens.splice(
                 0..0,
                 [
                     Token::owned(source.to_string(), TokenKind::Source),
+                    Token::owned(" ".to_string(), TokenKind::Plain),
+                ],
+            );
+        }
+
+        if let Some((marker, kind)) = self.marker {
+            parsed.tokens.splice(
+                0..0,
+                [
+                    Token::owned(marker.clone(), *kind),
                     Token::owned(" ".to_string(), TokenKind::Plain),
                 ],
             );

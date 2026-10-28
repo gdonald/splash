@@ -29,6 +29,19 @@ pub struct Entry<'a> {
 
 /// The entries of every log, ordered by time
 pub fn merge<'a>(logs: &[Log<'a>], zone: &Zone, now: i64) -> Vec<Entry<'a>> {
+    merge_timed(logs, zone, now)
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .collect()
+}
+
+/// The entries of every log, ordered by time, each with the moment its
+/// first line was written
+pub fn merge_timed<'a>(
+    logs: &[Log<'a>],
+    zone: &Zone,
+    now: i64,
+) -> Vec<(Option<Moment>, Entry<'a>)> {
     let mut timed: Vec<(Option<Moment>, Entry<'a>)> = logs
         .iter()
         .enumerate()
@@ -36,7 +49,7 @@ pub fn merge<'a>(logs: &[Log<'a>], zone: &Zone, now: i64) -> Vec<Entry<'a>> {
         .collect();
 
     timed.sort_by_key(|(moment, _)| *moment);
-    timed.into_iter().map(|(_, entry)| entry).collect()
+    timed
 }
 
 /// Splits a log into entries, each with the moment its first line was

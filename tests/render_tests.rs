@@ -587,7 +587,7 @@ fn line_numbers(rendered: &str) -> Vec<usize> {
     rendered
         .lines()
         .map(|line| {
-            line.strip_prefix("<span class=\"splash-line-number\">")
+            line.strip_prefix("<span class=\"splash-line-number\" aria-hidden=\"true\">")
                 .and_then(|rest| rest.split_once('<'))
                 .map(|(number, _)| number.parse().unwrap())
                 .unwrap()

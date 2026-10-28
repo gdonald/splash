@@ -1,6 +1,6 @@
 use splash::color::{Color, Style, UnknownColor};
 use splash::output::TokenKind;
-use splash::theme::{Theme, ThemeError, PRESETS};
+use splash::theme::{Theme, ThemeError, OKABE_ITO, PRESETS};
 use std::error::Error;
 
 #[test]
@@ -33,7 +33,7 @@ fn an_unknown_preset_lists_the_presets_it_knows() {
 
     assert_eq!(
         error.to_string(),
-        "Unknown theme 'neon' (expected one of dark, light, solarized, dracula)"
+        "Unknown theme 'neon' (expected one of dark, light, solarized, dracula, colorblind, high-contrast)"
     );
 }
 
@@ -210,4 +210,84 @@ fn a_saved_theme_lists_every_token_kind() {
             kind.name()
         );
     }
+}
+
+/// The WCAG relative luminance of a color
+fn luminance(color: Color) -> f64 {
+    let Color::Rgb(red, green, blue) = color else {
+        panic!("{:?} has no fixed value", color);
+    };
+    let linear = |channel: u8| {
+        let value = channel as f64 / 255.0;
+
+        match value <= 0.04045 {
+            true => value / 12.92,
+            false => ((value + 0.055) / 1.055).powf(2.4),
+        }
+    };
+
+    0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+}
+
+/// The WCAG contrast ratio between two colors
+fn contrast(one: Color, other: Color) -> f64 {
+    let (lighter, darker) = match luminance(one) >= luminance(other) {
+        true => (luminance(one), luminance(other)),
+        false => (luminance(other), luminance(one)),
+    };
+
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+#[test]
+fn the_high_contrast_theme_paints_every_token_at_least_seven_to_one_against_its_background() {
+    let theme = Theme::high_contrast();
+
+    for kind in TokenKind::all() {
+        let ratio = contrast(theme.style(kind).color, theme.background());
+
+        assert!(ratio >= 7.0, "{} is {:.2}:1", kind.name(), ratio);
+    }
+
+    assert!(contrast(theme.foreground(), theme.background()) >= 7.0);
+}
+
+#[test]
+fn the_colorblind_theme_paints_with_the_okabe_ito_palette_and_neutrals() {
+    let theme = Theme::colorblind();
+    let neutrals = [
+        Color::Default,
+        Color::BrightWhite,
+        Color::Rgb(0x99, 0x99, 0x99),
+    ];
+
+    for kind in TokenKind::all() {
+        let color = theme.style(kind).color;
+
+        assert!(
+            OKABE_ITO.contains(&color) || neutrals.contains(&color),
+            "{} is {:?}",
+            kind.name(),
+            color
+        );
+    }
+}
+
+#[test]
+fn the_colorblind_theme_tells_success_warning_and_failure_apart_by_color() {
+    let theme = Theme::colorblind();
+    let colors = [
+        theme.style(TokenKind::Success).color,
+        theme.style(TokenKind::Warning).color,
+        theme.style(TokenKind::Failure).color,
+    ];
+
+    assert_eq!(
+        colors,
+        [
+            Color::Rgb(0x56, 0xb4, 0xe9),
+            Color::Rgb(0xf0, 0xe4, 0x42),
+            Color::Rgb(0xd5, 0x5e, 0x00)
+        ]
+    );
 }

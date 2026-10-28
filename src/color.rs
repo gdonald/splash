@@ -224,6 +224,18 @@ impl fmt::Display for Style {
     }
 }
 
+/// Whether output to a terminal whose `TERM` is `term` may hold colors: not
+/// to a `dumb` terminal, which cannot show them, unless `CLICOLOR_FORCE`
+/// is set to a value other than 0
+pub fn terminal_shows_colors(term: Option<&str>, clicolor_force: Option<&str>) -> bool {
+    let forced = clicolor_force.is_some_and(|value| value != "0");
+
+    forced || term != Some(DUMB_TERMINAL)
+}
+
+/// The `TERM` of a terminal that cannot move the cursor or show colors
+pub const DUMB_TERMINAL: &str = "dumb";
+
 /// Lowercases, and treats underscores and hyphens as spaces, so that
 /// `bright_red`, `bright-red`, and `Bright Red` all read the same
 fn normalize(value: &str) -> String {

@@ -5,10 +5,97 @@
 //! a config file, from a saved profile, or from the command line.
 use crate::color::{Color, Style, UnknownColor};
 use crate::output::TokenKind;
+use crate::suggest;
 use std::fmt;
 
 /// Names of the built-in presets, in the order `--theme` lists them
-pub const PRESETS: [&str; 4] = ["dark", "light", "solarized", "dracula"];
+pub const PRESETS: [&str; 6] = [
+    "dark",
+    "light",
+    "solarized",
+    "dracula",
+    "colorblind",
+    "high-contrast",
+];
+
+/// The Okabe-Ito palette, whose colors stay apart for readers with
+/// protanopia, deuteranopia, and tritanopia
+pub const OKABE_ITO: [Color; 8] = [
+    Color::Rgb(0x00, 0x00, 0x00),
+    Color::Rgb(0xe6, 0x9f, 0x00),
+    Color::Rgb(0x56, 0xb4, 0xe9),
+    Color::Rgb(0x00, 0x9e, 0x73),
+    Color::Rgb(0xf0, 0xe4, 0x42),
+    Color::Rgb(0x00, 0x72, 0xb2),
+    Color::Rgb(0xd5, 0x5e, 0x00),
+    Color::Rgb(0xcc, 0x79, 0xa7),
+];
+
+/// What a token kind holds, which the role-based presets color
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Text,
+    Muted,
+    Time,
+    Address,
+    Number,
+    Method,
+    Request,
+    Status,
+    Level,
+    Identity,
+    Name,
+    Success,
+    Warning,
+    Failure,
+    Highlight,
+    Header,
+}
+
+impl Role {
+    fn of(kind: TokenKind) -> Role {
+        match kind {
+            TokenKind::Plain | TokenKind::Message => Role::Text,
+            TokenKind::Punctuation
+            | TokenKind::HttpVersion
+            | TokenKind::UserIdentifier
+            | TokenKind::Protocol
+            | TokenKind::UserAgent
+            | TokenKind::ContentType => Role::Muted,
+            TokenKind::DateTime | TokenKind::TimezoneOffset | TokenKind::Timestamp => Role::Time,
+            TokenKind::Ip | TokenKind::Client | TokenKind::VirtualHost | TokenKind::Host => {
+                Role::Address
+            }
+            TokenKind::Number
+            | TokenKind::Size
+            | TokenKind::Duration
+            | TokenKind::Pid
+            | TokenKind::Timers
+            | TokenKind::Counters => Role::Number,
+            TokenKind::HttpVerb | TokenKind::Method => Role::Method,
+            TokenKind::Request | TokenKind::Referer | TokenKind::Path => Role::Request,
+            TokenKind::Status | TokenKind::CacheResult | TokenKind::Termination => Role::Status,
+            TokenKind::Level => Role::Level,
+            TokenKind::UserId | TokenKind::Transaction | TokenKind::Email | TokenKind::QueueId => {
+                Role::Identity
+            }
+            TokenKind::Module
+            | TokenKind::Hierarchy
+            | TokenKind::Tag
+            | TokenKind::Frontend
+            | TokenKind::Backend
+            | TokenKind::Server
+            | TokenKind::Keyword
+            | TokenKind::Service
+            | TokenKind::Location => Role::Name,
+            TokenKind::Success | TokenKind::CacheHit => Role::Success,
+            TokenKind::Warning | TokenKind::CacheMiss => Role::Warning,
+            TokenKind::Failure | TokenKind::UnknownUser => Role::Failure,
+            TokenKind::Match | TokenKind::Capture => Role::Highlight,
+            TokenKind::Header | TokenKind::Source => Role::Header,
+        }
+    }
+}
 
 /// Error returned when a theme cannot be built
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,13 +110,17 @@ impl fmt::Display for ThemeError {
         match self {
             ThemeError::UnknownTheme(name) => write!(
                 f,
-                "Unknown theme '{}' (expected one of {})",
+                "Unknown theme '{}' (expected one of {}){}",
                 name,
-                PRESETS.join(", ")
+                PRESETS.join(", "),
+                suggest::hint(name, PRESETS)
             ),
-            ThemeError::UnknownTokenKind(name) => {
-                write!(f, "Unknown color key '{}'", name)
-            }
+            ThemeError::UnknownTokenKind(name) => write!(
+                f,
+                "Unknown color key '{}'{}",
+                name,
+                suggest::hint(name, TokenKind::names())
+            ),
             ThemeError::UnknownColor(error) => write!(f, "{}", error),
         }
     }
@@ -66,6 +157,8 @@ impl Theme {
             "light" => Ok(Theme::light()),
             "solarized" => Ok(Theme::solarized()),
             "dracula" => Ok(Theme::dracula()),
+            "colorblind" => Ok(Theme::colorblind()),
+            "high-contrast" => Ok(Theme::high_contrast()),
             _ => Err(ThemeError::UnknownTheme(name.to_string())),
         }
     }
@@ -155,6 +248,87 @@ impl Theme {
             background,
             foreground,
         }
+    }
+
+    /// A theme painting each token kind in the style of its role
+    fn from_roles(
+        name: &str,
+        background: Color,
+        foreground: Color,
+        style: impl Fn(Role) -> Style,
+    ) -> Theme {
+        Theme::build(
+            name,
+            background,
+            foreground,
+            TokenKind::all().map(|kind| style(Role::of(kind))),
+        )
+    }
+
+    /// Colors from the Okabe-Ito palette on a dark terminal, with success
+    /// sky blue and failure vermillion where other themes use green and red
+    pub fn colorblind() -> Theme {
+        let [_, orange, sky_blue, bluish_green, yellow, _, vermillion, reddish_purple] = OKABE_ITO;
+        let gray = Color::Rgb(0x99, 0x99, 0x99);
+
+        Theme::from_roles(
+            "colorblind",
+            Color::Rgb(0x1e, 0x1e, 0x1e),
+            Color::Default,
+            |role| match role {
+                Role::Text => Style::new(Color::Default),
+                Role::Muted => Style::new(gray),
+                Role::Time => Style::new(sky_blue),
+                Role::Address => Style::new(reddish_purple),
+                Role::Number => Style::new(yellow),
+                Role::Method => Style::bold(bluish_green),
+                Role::Request => Style::new(bluish_green),
+                Role::Status => Style::new(orange),
+                Role::Level => Style::bold(orange),
+                Role::Identity => Style::bold(Color::Default),
+                Role::Name => Style::bold(reddish_purple),
+                Role::Success => Style::bold(sky_blue),
+                Role::Warning => Style::bold(yellow),
+                Role::Failure => Style::bold(vermillion),
+                Role::Highlight => Style::bold(Color::BrightWhite),
+                Role::Header => Style::bold(Color::Default),
+            },
+        )
+    }
+
+    /// Light colors on black, each at least seven times as bright as the
+    /// background by the WCAG contrast ratio, with the fields that report
+    /// an outcome in bold
+    pub fn high_contrast() -> Theme {
+        let white = Color::Rgb(0xff, 0xff, 0xff);
+        let yellow = Color::Rgb(0xff, 0xff, 0x00);
+        let cyan = Color::Rgb(0x00, 0xff, 0xff);
+        let green = Color::Rgb(0x00, 0xff, 0x00);
+        let red = Color::Rgb(0xff, 0x80, 0x80);
+        let orange = Color::Rgb(0xff, 0xa5, 0x00);
+        let magenta = Color::Rgb(0xff, 0x80, 0xff);
+        let blue = Color::Rgb(0x80, 0xc0, 0xff);
+
+        Theme::from_roles(
+            "high-contrast",
+            Color::Rgb(0x00, 0x00, 0x00),
+            white,
+            |role| match role {
+                Role::Text | Role::Muted => Style::new(white),
+                Role::Time => Style::new(cyan),
+                Role::Address => Style::new(magenta),
+                Role::Number => Style::new(yellow),
+                Role::Method => Style::bold(blue),
+                Role::Request => Style::new(blue),
+                Role::Status => Style::new(orange),
+                Role::Level => Style::bold(orange),
+                Role::Identity | Role::Header | Role::Highlight => Style::bold(white),
+                Role::Name => Style::bold(magenta),
+                Role::Success => Style::bold(green),
+                Role::Warning => Style::bold(yellow),
+                Role::Failure => Style::bold(red),
+            },
+        )
     }
 
     /// The default theme: bright ANSI colors on a dark terminal
